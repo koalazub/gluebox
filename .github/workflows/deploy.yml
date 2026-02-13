@@ -2,8 +2,6 @@ name: Build and Deploy Gluebox
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '0 0 * * *'  # Daily check for updates from Codeberg
 
 env:
   CARGO_TERM_COLOR: always
@@ -13,10 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout from Codeberg
-        uses: actions/checkout@v4
-        with:
-          repository: koalazub/nixoala
-          path: nixoala
+        run: git clone --depth 1 https://codeberg.org/koalazub/nixoala.git nixoala
 
       - uses: dtolnay/rust-toolchain@stable
 
