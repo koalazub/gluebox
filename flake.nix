@@ -73,9 +73,11 @@
           postPatch = ''
             ln -sf ${./nix/valkey-bloom-Cargo.lock} Cargo.lock
           '';
-          postInstall = ''
+          installPhase = ''
+            runHook preInstall
             mkdir -p $out/lib
-            find target/release -name "libvalkey_bloom.so" -exec cp {} $out/lib/ \;
+            cp target/release/libvalkey_bloom.so $out/lib/
+            runHook postInstall
           '';
           doCheck = false;
           meta.description = "Bloom filter module for Valkey";
