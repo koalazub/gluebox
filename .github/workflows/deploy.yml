@@ -1,30 +1,25 @@
-name: Build and Deploy Gluebox
+name: Deploy gluebox-prod
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
 
-env:
-  CARGO_TERM_COLOR: always
-
 jobs:
-  build-and-deploy:
+  deploy:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout from Codeberg
-        run: git clone --depth 1 https://codeberg.org/koalazub/nixoala.git nixoala
+      - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
+      - uses: cachix/install-nix-action@v30
         with:
-          workspaces: nixoala/packages/gluebox
+          extra_nix_config: |
+            experimental-features = nix-command flakes
 
-      - name: Install system deps
-        run: sudo apt-get install -y libsqlite3-dev
-
-      - name: Build release binary
-        working-directory: nixoala/packages/gluebox
-        run: cargo build --release
+      - uses: cachix/cachix-action@v15
+        with:
+          name: nix-community
+          skipPush: true
 
       - name: Set up SSH
         run: |
@@ -32,17 +27,18 @@ jobs:
           echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts
-
-      - name: Deploy binary
-        run: |
-          scp -i ~/.ssh/deploy_key \
-            nixoala/packages/gluebox/target/release/gluebox \
-            root@${{ secrets.VPS_HOST }}:/opt/gluebox/bin/gluebox.new
-
-          ssh -i ~/.ssh/deploy_key root@${{ secrets.VPS_HOST }} << 'EOF'
-            mv /opt/gluebox/bin/gluebox.new /opt/gluebox/bin/gluebox
-            chmod +x /opt/gluebox/bin/gluebox
-            systemctl restart gluebox
-            sleep 3
-            systemctl is-active gluebox && echo "DEPLOY OK" || (journalctl -u gluebox -n 20 --no-pager && exit 1)
+          cat >> ~/.ssh/config << EOF
+          Host gluebox-prod
+            HostName ${{ secrets.VPS_HOST }}
+            User root
+            IdentityFile ~/.ssh/deploy_key
+            StrictHostKeyChecking no
           EOF
+
+      - name: Deploy with deploy-rs
+        env:
+          NIX_SSHOPTS: "-i $HOME/.ssh/deploy_key"
+        run: |
+          nix run github:serokell/deploy-rs -- \
+            --ssh-opts="-i $HOME/.ssh/deploy_key" \
+            .#gluebox-prod

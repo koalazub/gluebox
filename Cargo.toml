@@ -1,0 +1,32 @@
+[package]
+name = "gluebox"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+axum = { version = "0.8", features = ["macros"] }
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+rusqlite = { version = "0.37" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tokio-cron-scheduler = "0.13"
+tower-http = { version = "0.6", features = ["trace", "cors"] }
+bytes = "1"
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "2"
+url = "2"
+toml = "0.8"
+anyhow = "1"
+urlencoding = "2"
+matrix-sdk = { version = "0.16", default-features = false, features = ["e2e-encryption", "sqlite", "rustls-tls"] }
+dirs = "6"
+
+[profile.release]
+strip = true
+lto = false
