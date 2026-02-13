@@ -1,0 +1,53 @@
+name: Build and Deploy Gluebox
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 0 * * *'  # Daily check for updates from Codeberg
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout from Codeberg
+        uses: actions/checkout@v4
+        with:
+          repository: koalazub/nixoala
+          path: nixoala
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: nixoala/packages/gluebox
+
+      - name: Install system deps
+        run: sudo apt-get install -y libsqlite3-dev
+
+      - name: Build release binary
+        working-directory: nixoala/packages/gluebox
+        run: cargo build --release
+
+      - name: Set up SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Deploy binary
+        run: |
+          scp -i ~/.ssh/deploy_key \
+            nixoala/packages/gluebox/target/release/gluebox \
+            root@${{ secrets.VPS_HOST }}:/opt/gluebox/bin/gluebox.new
+
+          ssh -i ~/.ssh/deploy_key root@${{ secrets.VPS_HOST }} << 'EOF'
+            mv /opt/gluebox/bin/gluebox.new /opt/gluebox/bin/gluebox
+            chmod +x /opt/gluebox/bin/gluebox
+            systemctl restart gluebox
+            sleep 3
+            systemctl is-active gluebox && echo "DEPLOY OK" || (journalctl -u gluebox -n 20 --no-pager && exit 1)
+          EOF
