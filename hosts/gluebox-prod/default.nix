@@ -90,7 +90,7 @@ in
       ExecStart = lib.concatStringsSep " " [
         "${anySyncBundlePkg}/bin/any-sync-bundle"
         "start-bundle"
-        "--initial-external-addrs" "gluebox-prod.<tailnet>.ts.net"
+        "--initial-external-addrs" "gluebox-nixos"
         "--initial-mongo-uri" "mongodb://127.0.0.1:27017/"
         "--initial-redis-uri" "redis://127.0.0.1:6379/"
         "--initial-storage" "/var/lib/any-sync-bundle/storage"
@@ -132,6 +132,11 @@ in
     htop
     mongosh
   ];
+
+  swapDevices = [{
+    device = "/var/swapfile";
+    size = 2048;
+  }];
 
   system.stateVersion = "25.05";
 }
