@@ -31,7 +31,32 @@ in
     settings.PasswordAuthentication = false;
   };
 
-  services.tailscale.enable = true;
+  services.tailscale = {
+    enable = true;
+    useRoutingFeatures = "server";
+  };
+
+  # Tailscale Funnel: expose gluebox webhook endpoint publicly via HTTPS
+  # This creates a public URL at https://gluebox-nixos
+  # Linear and Documenso webhooks POST to this URL.
+  # The serve/funnel config persists across tailscaled restarts.
+  systemd.services.tailscale-funnel = {
+    description = "Tailscale Funnel for gluebox webhooks";
+    after = [ "tailscaled.service" "gluebox.service" ];
+    wants = [ "tailscaled.service" ];
+    wantedBy = [ "multi-user.target" ];
+    serviceConfig = {
+      Type = "oneshot";
+      RemainAfterExit = true;
+    };
+    path = [ pkgs.tailscale ];
+    script = ''
+      # Wait for tailscaled to be ready
+      sleep 5
+      tailscale serve --bg https / http://127.0.0.1:8990
+      tailscale funnel --bg 443 on
+    '';
+  };
 
   services.redis = {
     package = pkgs.valkey;
@@ -106,8 +131,9 @@ in
 
   systemd.services.gluebox = {
     description = "Gluebox webhook server";
-    after = [ "network-online.target" "mongodb.service" "redis.service" ];
+    after = [ "network-online.target" "mongodb.service" "redis.service" "any-sync-bundle.service" ];
     wants = [ "network-online.target" ];
+    requires = [ "any-sync-bundle.service" ];
     wantedBy = [ "multi-user.target" ];
     serviceConfig = {
       Type = "simple";
@@ -118,6 +144,7 @@ in
     };
     environment = {
       GLUEBOX_CONFIG = "/etc/gluebox/gluebox.toml";
+      RUST_LOG = "gluebox=info";
     };
   };
 
@@ -131,6 +158,7 @@ in
     curl
     htop
     mongosh
+    tailscale
   ];
 
   swapDevices = [{

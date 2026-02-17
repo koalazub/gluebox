@@ -1,20 +1,24 @@
 listen_addr = "127.0.0.1:8990"
-db_path = "/Users/koalazub/.local/share/gluebox/gluebox.db"
+
+# For production (NixOS VPS): use /var/lib/gluebox/gluebox.db
+# For local dev: use a local path like ./gluebox.db
+db_path = "/var/lib/gluebox/gluebox.db"
 
 [linear]
 api_key = "lin_api_XXXXXXXX"
 webhook_secret = "your-linear-webhook-signing-secret"
-team_id = ""
+team_id = "your-linear-team-id"
 
 [anytype]
-api_url = "http://localhost:31009"
+# any-sync-bundle exposes the Anytype API on localhost:31009
+api_url = "http://127.0.0.1:31009"
 api_key = "your-anytype-api-key"
 space_id = "your-anytype-space-id"
 
 [matrix]
 homeserver_url = "https://matrix-client.matrix.org"
 access_token = "your-matrix-access-token"
-room_id = "!roomid:matrix.org"
+room_id = "!your-encrypted-room-id:matrix.org"
 bot_username = "your-bot-username"
 bot_password = "your-bot-password"
 
