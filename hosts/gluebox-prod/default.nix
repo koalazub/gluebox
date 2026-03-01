@@ -132,20 +132,17 @@ in
   systemd.services.gluebox = {
     description = "Gluebox webhook server";
     after = [ "network-online.target" "mongodb.service" "redis.service" "any-sync-bundle.service" ];
-    wants = [ "network-online.target" ];
-    requires = [ "any-sync-bundle.service" ];
+    wants = [ "network-online.target" "any-sync-bundle.service" ];
     wantedBy = [ "multi-user.target" ];
-    unitConfig = {
-      # Skip (not fail) if config hasn't been provisioned yet.
-      # Run: install -m 600 gluebox.toml /etc/gluebox/gluebox.toml
-      # then: systemctl start gluebox
-      ConditionPathExists = "/etc/gluebox/gluebox.toml";
-    };
     serviceConfig = {
       Type = "simple";
       ExecStart = "${glueboxPkg}/bin/gluebox";
-      Restart = "on-failure";
-      RestartSec = 5;
+      # Always restart so the service stays in "activating" not "failed"
+      # state during nixos-rebuild switch — prevents deploy-rs from aborting.
+      # 30s delay avoids hammering external APIs (Matrix, Anytype) on failure.
+      Restart = "always";
+      RestartSec = 30;
+      StartLimitIntervalSec = 0;
       StateDirectory = "gluebox";
     };
     environment = {
