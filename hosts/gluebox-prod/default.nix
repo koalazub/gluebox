@@ -22,6 +22,7 @@ in
 
   users.users.root.openssh.authorizedKeys.keys = [
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMkn5pAtft3oahcYHzXtgURz6g+cUZbS9euMgAHarF+8 koalazub@KoalaBook.local"
+    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHRZighEl9bRZUwPGkIefAFmi1y8L6tSSkv8+zUXMVp7 koalazub@KoalaBook.local-2026"
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICoZ6NjPAXJJCt/Doqlg1rlrrkIIdCYMcg90CHbK2wfl gluebox-deploy"
   ];
 
@@ -53,8 +54,7 @@ in
     script = ''
       # Wait for tailscaled to be ready
       sleep 5
-      tailscale serve --bg https / http://127.0.0.1:8990
-      tailscale funnel --bg 443 on
+      tailscale funnel --bg http://127.0.0.1:8990
     '';
   };
 

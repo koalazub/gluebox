@@ -104,6 +104,7 @@
         default = pkgs.mkShell {
           buildInputs = with pkgs; [
             rustc cargo clippy rustfmt rust-analyzer pkg-config openssl sqlite
+            vultr-cli
             nushell
           ];
           shellHook = ''
