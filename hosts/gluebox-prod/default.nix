@@ -135,6 +135,12 @@ in
     wants = [ "network-online.target" ];
     requires = [ "any-sync-bundle.service" ];
     wantedBy = [ "multi-user.target" ];
+    unitConfig = {
+      # Skip (not fail) if config hasn't been provisioned yet.
+      # Run: install -m 600 gluebox.toml /etc/gluebox/gluebox.toml
+      # then: systemctl start gluebox
+      ConditionPathExists = "/etc/gluebox/gluebox.toml";
+    };
     serviceConfig = {
       Type = "simple";
       ExecStart = "${glueboxPkg}/bin/gluebox";
