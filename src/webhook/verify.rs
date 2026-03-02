@@ -15,16 +15,19 @@ pub fn linear_signature(header_sig: &str, raw_body: &[u8], secret: &str) -> bool
     mac.update(raw_body);
     let computed = mac.finalize().into_bytes();
 
-    constant_time_eq(&computed, &header_bytes)
+    constant_time_eq_pub(&computed, &header_bytes)
 }
 
 pub fn documenso_secret(header_secret: &str, expected: &str) -> bool {
-    constant_time_eq(header_secret.as_bytes(), expected.as_bytes())
+    constant_time_eq_pub(header_secret.as_bytes(), expected.as_bytes())
 }
 
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+pub fn constant_time_eq_pub(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
     }
-    a.iter().zip(b.iter()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+    a.iter()
+        .zip(b.iter())
+        .fold(0u8, |acc, (x, y)| acc | (x ^ y))
+        == 0
 }

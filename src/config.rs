@@ -5,6 +5,7 @@ use std::path::PathBuf;
 pub struct Config {
     pub listen_addr: String,
     pub db_path: PathBuf,
+    pub notify_secret: Option<String>,
     pub linear: LinearConfig,
     pub anytype: AnytypeConfig,
     pub matrix: MatrixConfig,
@@ -49,8 +50,7 @@ pub struct DocumensoConfig {
 
 impl Config {
     pub fn load() -> anyhow::Result<Self> {
-        let path = std::env::var("GLUEBOX_CONFIG")
-            .unwrap_or_else(|_| "gluebox.toml".to_string());
+        let path = std::env::var("GLUEBOX_CONFIG").unwrap_or_else(|_| "gluebox.toml".to_string());
         let content = std::fs::read_to_string(&path)
             .map_err(|e| anyhow::anyhow!("failed to read config at {path}: {e}"))?;
         let cfg: Config = toml::from_str(&content)?;

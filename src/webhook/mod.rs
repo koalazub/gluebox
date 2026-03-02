@@ -2,12 +2,13 @@ mod verify;
 
 use std::sync::Arc;
 use axum::{
-    Router,
+    Json, Router,
     extract::State,
     http::{HeaderMap, StatusCode},
     routing::{get, post},
 };
 use bytes::Bytes;
+use serde::Deserialize;
 
 use crate::AppState;
 use crate::triggers;
@@ -17,6 +18,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/health", get(health))
         .route("/webhooks/linear", post(handle_linear))
         .route("/webhooks/documenso", post(handle_documenso))
+        .route("/api/notify", post(handle_notify))
         .with_state(state)
 }
 
@@ -126,6 +128,68 @@ async fn handle_documenso(
         Ok(()) => StatusCode::OK,
         Err(e) => {
             tracing::error!(%e, "documenso trigger processing failed");
+            StatusCode::INTERNAL_SERVER_ERROR
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct NotifyRequest {
+    room_id: Option<String>,
+    message: String,
+    #[serde(default)]
+    format: NotifyFormat,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+enum NotifyFormat {
+    #[default]
+    Plain,
+    Markdown,
+}
+
+async fn handle_notify(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(req): Json<NotifyRequest>,
+) -> StatusCode {
+    let Some(ref secret) = state.cfg.notify_secret else {
+        tracing::warn!("notify endpoint called but notify_secret not configured");
+        return StatusCode::NOT_FOUND;
+    };
+
+    let provided = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .unwrap_or("");
+
+    if !verify::constant_time_eq_pub(provided.as_bytes(), secret.as_bytes()) {
+        tracing::warn!("notify endpoint: invalid bearer token");
+        return StatusCode::UNAUTHORIZED;
+    }
+
+    let Some(bot) = &state.matrix_bot else {
+        tracing::error!("notify endpoint: matrix bot not initialised");
+        return StatusCode::SERVICE_UNAVAILABLE;
+    };
+
+    let target = req.room_id.as_deref()
+        .unwrap_or(state.cfg.matrix.room_id.as_str());
+
+    let result = match req.format {
+        NotifyFormat::Plain => bot.send_to_room(target, &req.message).await,
+        NotifyFormat::Markdown => bot.send_markdown_to_room(target, &req.message).await,
+    };
+
+    match result {
+        Ok(()) => {
+            tracing::info!(room = target, "notify: message sent to matrix");
+            StatusCode::OK
+        }
+        Err(e) => {
+            tracing::error!(%e, room = target, "notify: failed to send to matrix");
             StatusCode::INTERNAL_SERVER_ERROR
         }
     }

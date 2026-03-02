@@ -118,6 +118,27 @@ impl MatrixBot {
         Ok(())
     }
 
+    pub async fn send_to_room(&self, target_room_id: &str, body: &str) -> Result<()> {
+        let room_id: OwnedRoomId = target_room_id.parse()?;
+        let room = self.client.get_room(&room_id)
+            .ok_or_else(|| anyhow::anyhow!("room not found: {}", room_id))?;
+
+        let content = RoomMessageEventContent::text_plain(body);
+        room.send(content).await?;
+        Ok(())
+    }
+
+    pub async fn send_markdown_to_room(&self, target_room_id: &str, markdown: &str) -> Result<()> {
+        let room_id: OwnedRoomId = target_room_id.parse()?;
+        let room = self.client.get_room(&room_id)
+            .ok_or_else(|| anyhow::anyhow!("room not found: {}", room_id))?;
+
+        let html = markdown_to_html(markdown);
+        let content = RoomMessageEventContent::text_html(markdown, html);
+        room.send(content).await?;
+        Ok(())
+    }
+
     pub async fn initial_sync(&self) -> Result<()> {
         tracing::info!("matrix-sdk: running initial sync...");
         self.client.sync_once(SyncSettings::default()).await?;

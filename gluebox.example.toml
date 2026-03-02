@@ -4,6 +4,9 @@ listen_addr = "127.0.0.1:8990"
 # For local dev: use a local path like ./gluebox.db
 db_path = "/var/lib/gluebox/gluebox.db"
 
+# Shared secret for /api/notify endpoint (Bearer token)
+notify_secret = "your-notify-secret-here"
+
 [linear]
 api_key = "lin_api_XXXXXXXX"
 webhook_secret = "your-linear-webhook-signing-secret"
