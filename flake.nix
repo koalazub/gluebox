@@ -29,30 +29,63 @@
 
       linuxPkgs = import nixpkgs { system = "x86_64-linux"; };
 
-      glueboxPackage = pkgs:
+      glueboxFor = pkgs:
         let
           craneLib = crane.mkLib pkgs;
-          src = craneLib.cleanCargoSource ./.;
+
+          src = pkgs.lib.cleanSourceWith {
+            src = ./.;
+            filter = path: type:
+              let baseName = baseNameOf path;
+              in !(
+                (builtins.match ".*\\.jj.*" path != null) ||
+                (builtins.match ".*\\.github.*" path != null) ||
+                (builtins.match ".*/hosts/.*" path != null) ||
+                (builtins.match ".*/nix/.*" path != null) ||
+                (builtins.match ".*/target/.*" path != null) ||
+                (builtins.match ".*\\.md$" path != null) ||
+                baseName == "flake.nix" ||
+                baseName == "flake.lock" ||
+                baseName == "cliff.toml" ||
+                baseName == ".gitignore" ||
+                baseName == "result"
+              ) || craneLib.filterCargoSources path type;
+          };
+
           commonArgs = {
             inherit src;
             strictDeps = true;
+            doCheck = false;
+            CARGO_INCREMENTAL = "0";
             nativeBuildInputs = with pkgs; [ pkg-config cmake ];
             buildInputs = with pkgs; [ openssl sqlite ]
               ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isDarwin [ pkgs.apple-sdk_15 ];
           };
-          cargoArtifacts = craneLib.buildDepsOnly commonArgs;
+
+          cargoArtifacts = craneLib.buildDepsOnly (commonArgs // {
+            buildPhaseCargoCommand = "cargo build --release --locked";
+          });
         in
-        craneLib.buildPackage (commonArgs // {
-          inherit cargoArtifacts;
-          meta = {
-            description = "Glue layer syncing Linear, Anytype, Matrix, and Documenso";
-            mainProgram = "gluebox";
-          };
-        });
+        {
+          package = craneLib.buildPackage (commonArgs // {
+            inherit cargoArtifacts;
+            cargoExtraArgs = "--release";
+            meta = {
+              description = "Glue layer syncing Linear, Anytype, Matrix, and Documenso";
+              mainProgram = "gluebox";
+            };
+          });
+
+          nextest = craneLib.cargoNextest (commonArgs // {
+            inherit cargoArtifacts;
+            cargoNextestExtraArgs = "--profile ci";
+          });
+        };
+
     in
     {
       packages = forAllSystems ({ system, pkgs }: {
-        gluebox = glueboxPackage pkgs;
+        gluebox = (glueboxFor pkgs).package;
 
         any-sync-bundle = (pkgs.buildGoModule.override { go = pkgs.go_1_25; }) {
           pname = "any-sync-bundle";
@@ -109,7 +142,12 @@
         };
       };
 
-      checks = builtins.mapAttrs (system: deployLib: deployLib.deployChecks self.deploy) deploy-rs.lib;
+      checks = nixpkgs.lib.recursiveUpdate
+        (builtins.mapAttrs (system: deployLib: deployLib.deployChecks self.deploy) deploy-rs.lib)
+        (nixpkgs.lib.genAttrs [ "x86_64-linux" "aarch64-darwin" ] (system:
+          let pkgs = import nixpkgs { inherit system; };
+          in { nextest = (glueboxFor pkgs).nextest; }
+        ));
 
       devShells = forAllSystems ({ system, pkgs }: {
         default = pkgs.mkShell {
@@ -124,6 +162,18 @@
               exec nu
             fi
           '';
+        };
+
+        ci = pkgs.mkShell {
+          buildInputs = with pkgs; [
+            rustc cargo cargo-nextest pkg-config cmake openssl sqlite
+          ];
+          env = {
+            CARGO_INCREMENTAL = "0";
+            CARGO_REGISTRIES_CRATES_IO_PROTOCOL = "sparse";
+            CARGO_HTTP_MULTIPLEXING = "true";
+            CARGO_NET_RETRY = "5";
+          };
         };
       });
     };
