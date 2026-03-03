@@ -8,18 +8,15 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6.0.2
 
-      - uses: cachix/install-nix-action@v30
-        with:
-          extra_nix_config: |
-            experimental-features = nix-command flakes
+      - uses: DeterminateSystems/determinate-nix-action@v3.16.3
 
-      - uses: cachix/cachix-action@v15
-        with:
-          name: nix-community
-          skipPush: true
+      - uses: DeterminateSystems/magic-nix-cache-action@v13
 
       - name: Set up SSH
         run: |
