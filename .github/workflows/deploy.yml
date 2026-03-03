@@ -39,3 +39,36 @@ jobs:
           nix run github:serokell/deploy-rs -- \
             --ssh-opts="-i $HOME/.ssh/deploy_key" \
             .#gluebox-prod
+
+  release:
+    needs: deploy
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6.0.2
+        with:
+          fetch-depth: 0
+
+      - uses: orhun/git-cliff-action@v4.7.1
+        id: cliff
+        with:
+          config: cliff.toml
+          args: --bump --unreleased --strip header
+        env:
+          OUTPUT: CHANGELOG.md
+          GITHUB_REPO: ${{ github.repository }}
+
+      - name: Create GitHub release
+        if: steps.cliff.outputs.version != ''
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ steps.cliff.outputs.version }}"
+          if gh release view "$VERSION" &>/dev/null; then
+            echo "Release $VERSION already exists, skipping"
+          else
+            gh release create "$VERSION" \
+              --title "$VERSION" \
+              --notes-file CHANGELOG.md
+          fi
