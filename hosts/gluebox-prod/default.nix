@@ -38,8 +38,7 @@ in
   };
 
   # Tailscale Funnel: expose gluebox webhook endpoint publicly via HTTPS
-  # This creates a public URL at https://gluebox-nixos
-  # Linear and Documenso webhooks POST to this URL.
+  # Linear and Documenso webhooks POST to the Funnel URL.
   # The serve/funnel config persists across tailscaled restarts.
   systemd.services.tailscale-funnel = {
     description = "Tailscale Funnel for gluebox webhooks";
@@ -115,7 +114,6 @@ in
       ExecStart = lib.concatStringsSep " " [
         "${anySyncBundlePkg}/bin/any-sync-bundle"
         "start-bundle"
-        "--initial-external-addrs" "gluebox-nixos"
         "--initial-mongo-uri" "mongodb://127.0.0.1:27017/"
         "--initial-redis-uri" "redis://127.0.0.1:6379/"
         "--initial-storage" "/var/lib/any-sync-bundle/storage"

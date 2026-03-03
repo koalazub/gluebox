@@ -18,6 +18,10 @@ jobs:
 
       - uses: DeterminateSystems/magic-nix-cache-action@v13
 
+      - uses: tailscale/github-action@v4.1.1
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTH_KEY }}
+
       - name: Set up SSH
         run: |
           mkdir -p ~/.ssh
