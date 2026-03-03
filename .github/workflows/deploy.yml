@@ -56,6 +56,16 @@ jobs:
             UserKnownHostsFile ~/.ssh/known_hosts
           EOF
 
+      - name: Build gluebox
+        run: nix build .#packages.x86_64-linux.gluebox
+
+      - name: Copy gluebox closure to VPS
+        env:
+          NIX_SSHOPTS: "-i $HOME/.ssh/deploy_key"
+        run: |
+          VPS_IP=$(tailscale ip --4 gluebox-nixos)
+          nix copy --to "ssh://root@$VPS_IP" .#packages.x86_64-linux.gluebox
+
       - name: Deploy with deploy-rs
         env:
           NIX_SSHOPTS: "-i $HOME/.ssh/deploy_key"
@@ -71,6 +81,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      pull-requests: read
     steps:
       - uses: actions/checkout@v6
         with:
