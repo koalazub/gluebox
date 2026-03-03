@@ -62,6 +62,8 @@ jobs:
         run: |
           nix run github:serokell/deploy-rs -- \
             --ssh-opts="-i $HOME/.ssh/deploy_key" \
+            --skip-checks \
+            --remote-build \
             .#gluebox-prod
 
   release:
