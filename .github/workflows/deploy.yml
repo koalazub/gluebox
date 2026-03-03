@@ -12,7 +12,7 @@ jobs:
       id-token: write
       contents: read
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@v6
 
       - uses: DeterminateSystems/determinate-nix-action@v3.16.3
 
@@ -28,13 +28,13 @@ jobs:
       id-token: write
       contents: read
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@v6
 
       - uses: DeterminateSystems/determinate-nix-action@v3.16.3
 
       - uses: DeterminateSystems/magic-nix-cache-action@v13
 
-      - uses: tailscale/github-action@v4.1.1
+      - uses: tailscale/github-action@v4
         with:
           oauth-client-id: ${{ secrets.TAILSCALE_OAUTH_CLIENT_ID }}
           oauth-secret: ${{ secrets.TAILSCALE_OAUTH_CLIENT_SECRET }}
@@ -45,13 +45,15 @@ jobs:
           mkdir -p ~/.ssh
           echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts
+          VPS_IP=$(tailscale ip --4 gluebox-nixos)
+          ssh-keyscan -H "$VPS_IP" >> ~/.ssh/known_hosts
           cat >> ~/.ssh/config << EOF
           Host gluebox-prod
-            HostName ${{ secrets.VPS_HOST }}
+            HostName $VPS_IP
             User root
             IdentityFile ~/.ssh/deploy_key
-            StrictHostKeyChecking no
+            StrictHostKeyChecking yes
+            UserKnownHostsFile ~/.ssh/known_hosts
           EOF
 
       - name: Deploy with deploy-rs
@@ -68,7 +70,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
