@@ -17,6 +17,21 @@
         "type": "github"
       }
     },
+    "crane": {
+      "locked": {
+        "lastModified": 1772080396,
+        "narHash": "sha256-84W9UNtSk9DNMh43WBkOjpkbfODlmg+RDi854PnNgLE=",
+        "owner": "ipetkov",
+        "repo": "crane",
+        "rev": "8525580bc0316c39dbfa18bd09a1331e98c9e463",
+        "type": "github"
+      },
+      "original": {
+        "owner": "ipetkov",
+        "repo": "crane",
+        "type": "github"
+      }
+    },
     "deploy-rs": {
       "inputs": {
         "flake-compat": "flake-compat",
@@ -74,6 +89,7 @@
     "root": {
       "inputs": {
         "any-sync-bundle-src": "any-sync-bundle-src",
+        "crane": "crane",
         "deploy-rs": "deploy-rs",
         "nixpkgs": "nixpkgs",
         "valkey-bloom-src": "valkey-bloom-src"

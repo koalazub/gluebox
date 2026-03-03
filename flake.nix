@@ -2,6 +2,8 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
+    crane.url = "github:ipetkov/crane";
+
     deploy-rs = {
       url = "github:serokell/deploy-rs";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -18,7 +20,7 @@
     };
   };
 
-  outputs = { self, nixpkgs, deploy-rs, any-sync-bundle-src, valkey-bloom-src, ... }:
+  outputs = { self, nixpkgs, crane, deploy-rs, any-sync-bundle-src, valkey-bloom-src, ... }:
     let
       forAllSystems = f: nixpkgs.lib.genAttrs [ "x86_64-linux" "aarch64-darwin" ] (system: f {
         inherit system;
@@ -26,22 +28,31 @@
       });
 
       linuxPkgs = import nixpkgs { system = "x86_64-linux"; };
-    in
-    {
-      packages = forAllSystems ({ system, pkgs }: {
-        gluebox = pkgs.rustPlatform.buildRustPackage {
-          pname = "gluebox";
-          version = "0.1.0";
-          src = nixpkgs.lib.cleanSource ./.;
-          cargoLock.lockFile = ./Cargo.lock;
-          nativeBuildInputs = with pkgs; [ pkg-config cmake ];
-          buildInputs = with pkgs; [ openssl sqlite ]
-            ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isDarwin [ pkgs.apple-sdk_15 ];
+
+      glueboxPackage = pkgs:
+        let
+          craneLib = crane.mkLib pkgs;
+          src = craneLib.cleanCargoSource ./.;
+          commonArgs = {
+            inherit src;
+            strictDeps = true;
+            nativeBuildInputs = with pkgs; [ pkg-config cmake ];
+            buildInputs = with pkgs; [ openssl sqlite ]
+              ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isDarwin [ pkgs.apple-sdk_15 ];
+          };
+          cargoArtifacts = craneLib.buildDepsOnly commonArgs;
+        in
+        craneLib.buildPackage (commonArgs // {
+          inherit cargoArtifacts;
           meta = {
             description = "Glue layer syncing Linear, Anytype, Matrix, and Documenso";
             mainProgram = "gluebox";
           };
-        };
+        });
+    in
+    {
+      packages = forAllSystems ({ system, pkgs }: {
+        gluebox = glueboxPackage pkgs;
 
         any-sync-bundle = (pkgs.buildGoModule.override { go = pkgs.go_1_25; }) {
           pname = "any-sync-bundle";

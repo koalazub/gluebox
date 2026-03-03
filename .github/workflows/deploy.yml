@@ -18,6 +18,16 @@ jobs:
 
       - uses: DeterminateSystems/magic-nix-cache-action@v13
 
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
       - name: Run tests
         run: nix develop --command cargo nextest run --profile ci
 
@@ -36,7 +46,9 @@ jobs:
 
       - uses: tailscale/github-action@v4.1.1
         with:
-          authkey: ${{ secrets.TAILSCALE_AUTH_KEY }}
+          oauth-client-id: ${{ secrets.TAILSCALE_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TAILSCALE_OAUTH_CLIENT_SECRET }}
+          tags: tag:ci
 
       - name: Set up SSH
         run: |
