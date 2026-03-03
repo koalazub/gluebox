@@ -60,21 +60,19 @@ jobs:
         run: nix build .#packages.x86_64-linux.gluebox
 
       - name: Copy gluebox closure to VPS
-        env:
-          NIX_SSHOPTS: "-i $HOME/.ssh/deploy_key"
         run: |
           VPS_IP=$(tailscale ip --4 gluebox-nixos)
-          nix copy --to "ssh://root@$VPS_IP" .#packages.x86_64-linux.gluebox
+          NIX_SSHOPTS="-i $HOME/.ssh/deploy_key" \
+            nix copy --to "ssh://root@$VPS_IP" .#packages.x86_64-linux.gluebox
 
       - name: Deploy with deploy-rs
-        env:
-          NIX_SSHOPTS: "-i $HOME/.ssh/deploy_key"
         run: |
-          nix run github:serokell/deploy-rs -- \
-            --ssh-opts="-i $HOME/.ssh/deploy_key" \
-            --skip-checks \
-            --remote-build \
-            .#gluebox-prod
+          NIX_SSHOPTS="-i $HOME/.ssh/deploy_key" \
+            nix run github:serokell/deploy-rs -- \
+              --ssh-opts="-i $HOME/.ssh/deploy_key" \
+              --skip-checks \
+              --remote-build \
+              .#gluebox-prod
 
   release:
     needs: deploy
