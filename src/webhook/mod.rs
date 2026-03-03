@@ -64,9 +64,9 @@ async fn handle_linear(
 
     tracing::info!(action, event_type, "linear webhook received");
 
-    if let Err(e) = state.db.log_event("linear", &format!("{event_type}.{action}"), 
+    if let Err(e) = state.db.log_event("linear", &format!("{event_type}.{action}"),
         payload["data"]["id"].as_str().unwrap_or("unknown"),
-        Some(&body.iter().map(|&b| b as char).collect::<String>())) {
+        Some(&body.iter().map(|&b| b as char).collect::<String>())).await {
         tracing::error!(%e, "failed to log linear event");
     }
 
@@ -114,7 +114,7 @@ async fn handle_documenso(
     tracing::info!(event = %payload.event, doc_id = %payload.payload.id, "documenso webhook received");
 
     if let Err(e) = state.db.log_event("documenso", &payload.event,
-        &payload.payload.id.to_string(), None) {
+        &payload.payload.id.to_string(), None).await {
         tracing::error!(%e, "failed to log documenso event");
     }
 

@@ -64,7 +64,7 @@ pub async fn linear_issue_created(state: &Arc<AppState>, payload: &Value) -> any
         linear_url: Some(url.to_string()),
         anytype_url: None,
         last_synced_at: None,
-    })?;
+    }).await?;
 
     let linear = LinearClient::new(&state.cfg.linear.api_key);
     let link_text = format!(
@@ -82,7 +82,7 @@ pub async fn linear_issue_created(state: &Arc<AppState>, payload: &Value) -> any
 pub async fn linear_issue_updated(state: &Arc<AppState>, payload: &Value) -> anyhow::Result<()> {
     let issue_id = payload["data"]["id"].as_str().unwrap_or_default();
 
-    let Some(mapping) = state.db.get_spec_by_linear_id(issue_id)? else {
+    let Some(mapping) = state.db.get_spec_by_linear_id(issue_id).await? else {
         tracing::debug!(issue_id, "no spec mapping for this issue, skipping");
         return Ok(());
     };

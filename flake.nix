@@ -104,11 +104,12 @@
         default = pkgs.mkShell {
           buildInputs = with pkgs; [
             rustc cargo clippy rustfmt rust-analyzer pkg-config openssl sqlite
+            cargo-nextest
             vultr-cli
             nushell
           ];
           shellHook = ''
-            if command -v nu &> /dev/null; then
+            if [[ $- == *i* ]] && command -v nu &> /dev/null; then
               exec nu
             fi
           '';

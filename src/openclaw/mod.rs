@@ -259,7 +259,7 @@ pub async fn process_feedback_clusters(
         let label_name = capitalize(&cluster.category);
         let color = category_color(&cluster.category);
 
-        let existing_db = match state.db.get_feedback_by_category(&cluster.category, 20) {
+        let existing_db = match state.db.get_feedback_by_category(&cluster.category, 20).await {
             Ok(v) => v,
             Err(e) => {
                 tracing::error!(error = %e, "feedback: db query failed");
@@ -335,7 +335,7 @@ pub async fn process_feedback_clusters(
                         &cluster.title,
                         &cluster.category,
                         &cluster.description,
-                    );
+                    ).await;
                 }
 
                 tracing::info!(issue_id = %issue_id, title = %cluster.title, "feedback: created linear issue");
@@ -362,4 +362,88 @@ fn build_issue_description(cluster: &FeedbackCluster) -> String {
         "{}\n\n**Reported feedback items:**\n{}",
         cluster.description, items
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::connectors::opencode::IntentKind;
+
+    #[test]
+    fn feedback_bang_prefix() {
+        let (kind, body) = fast_classify("!feedback login crashes on iOS").unwrap();
+        assert!(matches!(kind, IntentKind::Feedback));
+        assert_eq!(body, "login crashes on iOS");
+    }
+
+    #[test]
+    fn feedback_colon_prefix() {
+        let (kind, body) = fast_classify("feedback: dark mode is missing").unwrap();
+        assert!(matches!(kind, IntentKind::Feedback));
+        assert_eq!(body, "dark mode is missing");
+    }
+
+    #[test]
+    fn feedback_bang_no_body_returns_original() {
+        let (kind, body) = fast_classify("!feedback").unwrap();
+        assert!(matches!(kind, IntentKind::Feedback));
+        assert_eq!(body, "!feedback");
+    }
+
+    #[test]
+    fn spec_signal_detected() {
+        let (kind, _) = fast_classify("Can you write a spec for the new auth flow?").unwrap();
+        assert!(matches!(kind, IntentKind::Spec));
+    }
+
+    #[test]
+    fn spec_draft_signal_detected() {
+        let (kind, prompt) = fast_classify("draft a spec for pagination").unwrap();
+        assert!(matches!(kind, IntentKind::Spec));
+        assert_eq!(prompt, "pagination");
+    }
+
+    #[test]
+    fn decision_signal_detected() {
+        let (kind, _) = fast_classify("should we use postgres or sqlite?").unwrap();
+        assert!(matches!(kind, IntentKind::Decision));
+    }
+
+    #[test]
+    fn adr_signal_detected() {
+        let (kind, prompt) = fast_classify("adr for using tokio over async-std").unwrap();
+        assert!(matches!(kind, IntentKind::Decision));
+        assert_eq!(prompt, "using tokio over async-std");
+    }
+
+    #[test]
+    fn issue_signal_detected() {
+        let (kind, _) = fast_classify("file an issue for the broken login page").unwrap();
+        assert!(matches!(kind, IntentKind::Issue));
+    }
+
+    #[test]
+    fn track_this_signal_detected() {
+        let (kind, prompt) = fast_classify("track this: memory leak in worker").unwrap();
+        assert!(matches!(kind, IntentKind::Issue));
+        assert_eq!(prompt.trim_start_matches(':').trim(), "memory leak in worker");
+    }
+
+    #[test]
+    fn no_signal_returns_none() {
+        assert!(fast_classify("hello there, how are you?").is_none());
+        assert!(fast_classify("what time is it?").is_none());
+    }
+
+    #[test]
+    fn strip_signal_extracts_suffix() {
+        let result = strip_signal("spec for the auth flow", "spec for", "spec for the auth flow");
+        assert_eq!(result, "the auth flow");
+    }
+
+    #[test]
+    fn strip_signal_empty_suffix_returns_original() {
+        let result = strip_signal("spec for", "spec for", "spec for");
+        assert_eq!(result, "spec for");
+    }
 }

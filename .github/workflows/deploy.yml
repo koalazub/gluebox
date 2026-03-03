@@ -6,7 +6,23 @@ on:
   workflow_dispatch:
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v6.0.2
+
+      - uses: DeterminateSystems/determinate-nix-action@v3.16.3
+
+      - uses: DeterminateSystems/magic-nix-cache-action@v13
+
+      - name: Run tests
+        run: nix develop --command cargo nextest run --profile ci
+
   deploy:
+    needs: test
     runs-on: ubuntu-latest
     permissions:
       id-token: write

@@ -1,9 +1,8 @@
-use rusqlite::{Connection, params};
+use libsql::{Builder, Connection, params};
 use std::path::Path;
-use std::sync::Mutex;
 
 pub struct Db {
-    conn: Mutex<Connection>,
+    conn: Connection,
 }
 
 #[derive(Debug, Clone)]
@@ -33,18 +32,32 @@ pub struct ContractMapping {
     pub last_synced_at: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct GithubLinearMapping {
+    pub github_issue_number: i64,
+    pub github_repo: String,
+    pub linear_issue_id: String,
+    pub linear_issue_url: Option<String>,
+}
+
 impl Db {
-    pub fn open(path: &Path) -> anyhow::Result<Self> {
-        let conn = Connection::open(path)?;
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
-        let db = Db { conn: Mutex::new(conn) };
-        db.migrate()?;
-        Ok(db)
+    pub async fn open(path: &Path, turso: Option<&crate::config::TursoConfig>) -> anyhow::Result<Self> {
+        let db = match turso {
+            Some(cfg) => Builder::new_remote(cfg.url.clone(), cfg.auth_token.clone())
+                .build()
+                .await?,
+            None => Builder::new_local(path)
+                .build()
+                .await?,
+        };
+        let conn = db.connect()?;
+        let instance = Db { conn };
+        instance.migrate().await?;
+        Ok(instance)
     }
 
-    fn migrate(&self) -> anyhow::Result<()> {
-        let conn = self.conn.lock().unwrap();
-        conn.execute_batch(
+    async fn migrate(&self) -> anyhow::Result<()> {
+        self.conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS spec_mappings (
                 linear_issue_id TEXT PRIMARY KEY,
                 anytype_object_id TEXT,
@@ -80,18 +93,27 @@ impl Db {
                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
 
+            CREATE TABLE IF NOT EXISTS github_linear_mappings (
+                github_issue_number INTEGER NOT NULL,
+                github_repo TEXT NOT NULL,
+                linear_issue_id TEXT NOT NULL,
+                linear_issue_url TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                PRIMARY KEY (github_issue_number, github_repo)
+            );
+
             CREATE INDEX IF NOT EXISTS idx_spec_anytype ON spec_mappings(anytype_object_id);
             CREATE INDEX IF NOT EXISTS idx_contract_anytype ON contract_mappings(anytype_object_id);
             CREATE INDEX IF NOT EXISTS idx_contract_linear ON contract_mappings(linear_issue_id);
             CREATE INDEX IF NOT EXISTS idx_event_log_ext ON event_log(source, external_id);
-            CREATE INDEX IF NOT EXISTS idx_feedback_category ON feedback_tickets(category);"
-        )?;
+            CREATE INDEX IF NOT EXISTS idx_feedback_category ON feedback_tickets(category);
+            CREATE INDEX IF NOT EXISTS idx_gh_linear_mapping ON github_linear_mappings(linear_issue_id);"
+        ).await?;
         Ok(())
     }
 
-    pub fn upsert_spec(&self, mapping: &SpecMapping) -> anyhow::Result<()> {
-        let conn = self.conn.lock().unwrap();
-        conn.execute(
+    pub async fn upsert_spec(&self, mapping: &SpecMapping) -> anyhow::Result<()> {
+        self.conn.execute(
             "INSERT INTO spec_mappings (linear_issue_id, anytype_object_id, linear_url, anytype_url, last_synced_at)
              VALUES (?1, ?2, ?3, ?4, datetime('now'))
              ON CONFLICT(linear_issue_id) DO UPDATE SET
@@ -100,62 +122,53 @@ impl Db {
                 anytype_url = COALESCE(excluded.anytype_url, anytype_url),
                 last_synced_at = datetime('now')",
             params![
-                mapping.linear_issue_id,
-                mapping.anytype_object_id,
-                mapping.linear_url,
-                mapping.anytype_url,
+                mapping.linear_issue_id.clone(),
+                mapping.anytype_object_id.clone(),
+                mapping.linear_url.clone(),
+                mapping.anytype_url.clone(),
             ],
-        )?;
+        ).await?;
         Ok(())
     }
 
-    pub fn get_spec_by_linear_id(&self, linear_issue_id: &str) -> anyhow::Result<Option<SpecMapping>> {
-        let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
+    pub async fn get_spec_by_linear_id(&self, linear_issue_id: &str) -> anyhow::Result<Option<SpecMapping>> {
+        let mut rows = self.conn.query(
             "SELECT linear_issue_id, anytype_object_id, linear_url, anytype_url, last_synced_at
-             FROM spec_mappings WHERE linear_issue_id = ?1"
-        )?;
-        let result = stmt.query_row(params![linear_issue_id], |row| {
-            Ok(SpecMapping {
+             FROM spec_mappings WHERE linear_issue_id = ?1",
+            params![linear_issue_id.to_string()],
+        ).await?;
+        match rows.next().await? {
+            Some(row) => Ok(Some(SpecMapping {
                 linear_issue_id: row.get(0)?,
                 anytype_object_id: row.get(1)?,
                 linear_url: row.get(2)?,
                 anytype_url: row.get(3)?,
                 last_synced_at: row.get(4)?,
-            })
-        });
-        match result {
-            Ok(m) => Ok(Some(m)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(e.into()),
+            })),
+            None => Ok(None),
         }
     }
 
-    pub fn get_spec_by_anytype_id(&self, anytype_object_id: &str) -> anyhow::Result<Option<SpecMapping>> {
-        let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
+    pub async fn get_spec_by_anytype_id(&self, anytype_object_id: &str) -> anyhow::Result<Option<SpecMapping>> {
+        let mut rows = self.conn.query(
             "SELECT linear_issue_id, anytype_object_id, linear_url, anytype_url, last_synced_at
-             FROM spec_mappings WHERE anytype_object_id = ?1"
-        )?;
-        let result = stmt.query_row(params![anytype_object_id], |row| {
-            Ok(SpecMapping {
+             FROM spec_mappings WHERE anytype_object_id = ?1",
+            params![anytype_object_id.to_string()],
+        ).await?;
+        match rows.next().await? {
+            Some(row) => Ok(Some(SpecMapping {
                 linear_issue_id: row.get(0)?,
                 anytype_object_id: row.get(1)?,
                 linear_url: row.get(2)?,
                 anytype_url: row.get(3)?,
                 last_synced_at: row.get(4)?,
-            })
-        });
-        match result {
-            Ok(m) => Ok(Some(m)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(e.into()),
+            })),
+            None => Ok(None),
         }
     }
 
-    pub fn upsert_contract(&self, mapping: &ContractMapping) -> anyhow::Result<()> {
-        let conn = self.conn.lock().unwrap();
-        conn.execute(
+    pub async fn upsert_contract(&self, mapping: &ContractMapping) -> anyhow::Result<()> {
+        self.conn.execute(
             "INSERT INTO contract_mappings (documenso_document_id, anytype_object_id, linear_issue_id, status, last_synced_at)
              VALUES (?1, ?2, ?3, ?4, datetime('now'))
              ON CONFLICT(documenso_document_id) DO UPDATE SET
@@ -164,47 +177,47 @@ impl Db {
                 status = COALESCE(excluded.status, status),
                 last_synced_at = datetime('now')",
             params![
-                mapping.documenso_document_id,
-                mapping.anytype_object_id,
-                mapping.linear_issue_id,
-                mapping.status,
+                mapping.documenso_document_id.clone(),
+                mapping.anytype_object_id.clone(),
+                mapping.linear_issue_id.clone(),
+                mapping.status.clone(),
             ],
-        )?;
+        ).await?;
         Ok(())
     }
 
-    pub fn get_contract_by_documenso_id(&self, doc_id: &str) -> anyhow::Result<Option<ContractMapping>> {
-        let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
+    pub async fn get_contract_by_documenso_id(&self, doc_id: &str) -> anyhow::Result<Option<ContractMapping>> {
+        let mut rows = self.conn.query(
             "SELECT documenso_document_id, anytype_object_id, linear_issue_id, status, last_synced_at
-             FROM contract_mappings WHERE documenso_document_id = ?1"
-        )?;
-        let result = stmt.query_row(params![doc_id], |row| {
-            Ok(ContractMapping {
+             FROM contract_mappings WHERE documenso_document_id = ?1",
+            params![doc_id.to_string()],
+        ).await?;
+        match rows.next().await? {
+            Some(row) => Ok(Some(ContractMapping {
                 documenso_document_id: row.get(0)?,
                 anytype_object_id: row.get(1)?,
                 linear_issue_id: row.get(2)?,
                 status: row.get(3)?,
                 last_synced_at: row.get(4)?,
-            })
-        });
-        match result {
-            Ok(m) => Ok(Some(m)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(e.into()),
+            })),
+            None => Ok(None),
         }
     }
 
-    pub fn log_event(&self, source: &str, event_type: &str, external_id: &str, payload: Option<&str>) -> anyhow::Result<()> {
-        let conn = self.conn.lock().unwrap();
-        conn.execute(
+    pub async fn log_event(&self, source: &str, event_type: &str, external_id: &str, payload: Option<&str>) -> anyhow::Result<()> {
+        self.conn.execute(
             "INSERT INTO event_log (source, event_type, external_id, payload) VALUES (?1, ?2, ?3, ?4)",
-            params![source, event_type, external_id, payload],
-        )?;
+            params![
+                source.to_string(),
+                event_type.to_string(),
+                external_id.to_string(),
+                payload.map(|s| s.to_string()),
+            ],
+        ).await?;
         Ok(())
     }
 
-    pub fn insert_feedback_ticket(
+    pub async fn insert_feedback_ticket(
         &self,
         linear_issue_id: &str,
         linear_issue_url: &str,
@@ -212,76 +225,319 @@ impl Db {
         category: &str,
         description: &str,
     ) -> anyhow::Result<()> {
-        let conn = self.conn.lock().unwrap();
-        conn.execute(
+        self.conn.execute(
             "INSERT OR IGNORE INTO feedback_tickets
              (linear_issue_id, linear_issue_url, title, category, description)
              VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![linear_issue_id, linear_issue_url, title, category, description],
-        )?;
+            params![
+                linear_issue_id.to_string(),
+                linear_issue_url.to_string(),
+                title.to_string(),
+                category.to_string(),
+                description.to_string(),
+            ],
+        ).await?;
         Ok(())
     }
 
-    /// Return all feedback tickets in the same category, up to `limit`.
-    /// Used for deduplication: compare new cluster against these before creating.
-    pub fn get_feedback_by_category(
-        &self,
-        category: &str,
-        limit: usize,
-    ) -> anyhow::Result<Vec<FeedbackTicket>> {
-        let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
+    pub async fn get_feedback_by_category(&self, category: &str, limit: usize) -> anyhow::Result<Vec<FeedbackTicket>> {
+        let mut rows = self.conn.query(
             "SELECT linear_issue_id, linear_issue_url, title, category, description
              FROM feedback_tickets
              WHERE category = ?1
              ORDER BY created_at DESC
              LIMIT ?2",
-        )?;
-        let rows = stmt.query_map(params![category, limit as i64], |row| {
-            Ok(FeedbackTicket {
+            params![category.to_string(), limit as i64],
+        ).await?;
+        let mut results = Vec::new();
+        while let Some(row) = rows.next().await? {
+            results.push(FeedbackTicket {
                 linear_issue_id: row.get(0)?,
                 linear_issue_url: row.get(1)?,
                 title: row.get(2)?,
                 category: row.get(3)?,
                 description: row.get(4)?,
-            })
-        })?;
-        Ok(rows.filter_map(|r| r.ok()).collect())
+            });
+        }
+        Ok(results)
     }
 
-    pub fn specs_missing_anytype_link(&self) -> anyhow::Result<Vec<SpecMapping>> {
-        let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
+    pub async fn specs_missing_anytype_link(&self) -> anyhow::Result<Vec<SpecMapping>> {
+        let mut rows = self.conn.query(
             "SELECT linear_issue_id, anytype_object_id, linear_url, anytype_url, last_synced_at
-             FROM spec_mappings WHERE anytype_object_id IS NULL"
-        )?;
-        let rows = stmt.query_map([], |row| {
-            Ok(SpecMapping {
+             FROM spec_mappings WHERE anytype_object_id IS NULL",
+            params![],
+        ).await?;
+        let mut results = Vec::new();
+        while let Some(row) = rows.next().await? {
+            results.push(SpecMapping {
                 linear_issue_id: row.get(0)?,
                 anytype_object_id: row.get(1)?,
                 linear_url: row.get(2)?,
                 anytype_url: row.get(3)?,
                 last_synced_at: row.get(4)?,
-            })
-        })?;
-        Ok(rows.filter_map(|r| r.ok()).collect())
+            });
+        }
+        Ok(results)
     }
 
-    pub fn specs_missing_linear_id(&self) -> anyhow::Result<Vec<SpecMapping>> {
-        let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
+    pub async fn specs_missing_linear_id(&self) -> anyhow::Result<Vec<SpecMapping>> {
+        let mut rows = self.conn.query(
             "SELECT linear_issue_id, anytype_object_id, linear_url, anytype_url, last_synced_at
-             FROM spec_mappings WHERE linear_issue_id IS NULL OR linear_issue_id = ''"
-        )?;
-        let rows = stmt.query_map([], |row| {
-            Ok(SpecMapping {
+             FROM spec_mappings WHERE linear_issue_id IS NULL OR linear_issue_id = ''",
+            params![],
+        ).await?;
+        let mut results = Vec::new();
+        while let Some(row) = rows.next().await? {
+            results.push(SpecMapping {
                 linear_issue_id: row.get(0)?,
                 anytype_object_id: row.get(1)?,
                 linear_url: row.get(2)?,
                 anytype_url: row.get(3)?,
                 last_synced_at: row.get(4)?,
-            })
-        })?;
-        Ok(rows.filter_map(|r| r.ok()).collect())
+            });
+        }
+        Ok(results)
+    }
+
+    pub async fn insert_github_linear_mapping(
+        &self,
+        github_issue_number: i64,
+        github_repo: &str,
+        linear_issue_id: &str,
+        linear_issue_url: Option<&str>,
+    ) -> anyhow::Result<()> {
+        self.conn.execute(
+            "INSERT OR IGNORE INTO github_linear_mappings
+             (github_issue_number, github_repo, linear_issue_id, linear_issue_url)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![
+                github_issue_number,
+                github_repo.to_string(),
+                linear_issue_id.to_string(),
+                linear_issue_url.map(|s| s.to_string()),
+            ],
+        ).await?;
+        Ok(())
+    }
+
+    pub async fn get_linear_issue_for_github(&self, github_issue_number: i64, github_repo: &str) -> anyhow::Result<Option<GithubLinearMapping>> {
+        let mut rows = self.conn.query(
+            "SELECT github_issue_number, github_repo, linear_issue_id, linear_issue_url
+             FROM github_linear_mappings
+             WHERE github_issue_number = ?1 AND github_repo = ?2",
+            params![github_issue_number, github_repo.to_string()],
+        ).await?;
+        match rows.next().await? {
+            Some(row) => Ok(Some(GithubLinearMapping {
+                github_issue_number: row.get(0)?,
+                github_repo: row.get(1)?,
+                linear_issue_id: row.get(2)?,
+                linear_issue_url: row.get(3)?,
+            })),
+            None => Ok(None),
+        }
+    }
+
+    #[cfg(test)]
+    pub async fn new_in_memory() -> anyhow::Result<Self> {
+        let db = Builder::new_local(":memory:").build().await?;
+        let conn = db.connect()?;
+        let instance = Db { conn };
+        instance.migrate().await?;
+        Ok(instance)
+    }
+
+    pub async fn get_github_issue_for_linear(
+        &self,
+        linear_issue_id: &str,
+    ) -> anyhow::Result<Option<GithubLinearMapping>> {
+        let mut rows = self.conn.query(
+            "SELECT github_issue_number, github_repo, linear_issue_id, linear_issue_url
+             FROM github_linear_mappings
+             WHERE linear_issue_id = ?1",
+            params![linear_issue_id.to_string()],
+        ).await?;
+        match rows.next().await? {
+            Some(row) => Ok(Some(GithubLinearMapping {
+                github_issue_number: row.get(0)?,
+                github_repo: row.get(1)?,
+                linear_issue_id: row.get(2)?,
+                linear_issue_url: row.get(3)?,
+            })),
+            None => Ok(None),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn db() -> Db {
+        Db::new_in_memory().await.expect("in-memory db")
+    }
+
+    #[tokio::test]
+    async fn spec_roundtrip() {
+        let db = db().await;
+        let mapping = SpecMapping {
+            linear_issue_id: "LIN-1".into(),
+            anytype_object_id: Some("AT-1".into()),
+            linear_url: Some("https://linear.app/1".into()),
+            anytype_url: Some("https://anytype.io/1".into()),
+            last_synced_at: None,
+        };
+        db.upsert_spec(&mapping).await.unwrap();
+        let got = db.get_spec_by_linear_id("LIN-1").await.unwrap().unwrap();
+        assert_eq!(got.linear_issue_id, "LIN-1");
+        assert_eq!(got.anytype_object_id.as_deref(), Some("AT-1"));
+    }
+
+    #[tokio::test]
+    async fn spec_upsert_preserves_existing_fields() {
+        let db = db().await;
+        db.upsert_spec(&SpecMapping {
+            linear_issue_id: "LIN-2".into(),
+            anytype_object_id: Some("AT-2".into()),
+            linear_url: Some("https://linear.app/2".into()),
+            anytype_url: None,
+            last_synced_at: None,
+        }).await.unwrap();
+        db.upsert_spec(&SpecMapping {
+            linear_issue_id: "LIN-2".into(),
+            anytype_object_id: None,
+            linear_url: None,
+            anytype_url: Some("https://anytype.io/2".into()),
+            last_synced_at: None,
+        }).await.unwrap();
+        let got = db.get_spec_by_linear_id("LIN-2").await.unwrap().unwrap();
+        assert_eq!(got.anytype_object_id.as_deref(), Some("AT-2"));
+        assert_eq!(got.anytype_url.as_deref(), Some("https://anytype.io/2"));
+    }
+
+    #[tokio::test]
+    async fn spec_by_anytype_id() {
+        let db = db().await;
+        db.upsert_spec(&SpecMapping {
+            linear_issue_id: "LIN-3".into(),
+            anytype_object_id: Some("AT-3".into()),
+            linear_url: None,
+            anytype_url: None,
+            last_synced_at: None,
+        }).await.unwrap();
+        let got = db.get_spec_by_anytype_id("AT-3").await.unwrap().unwrap();
+        assert_eq!(got.linear_issue_id, "LIN-3");
+    }
+
+    #[tokio::test]
+    async fn spec_missing_anytype_link() {
+        let db = db().await;
+        db.upsert_spec(&SpecMapping {
+            linear_issue_id: "LIN-4".into(),
+            anytype_object_id: None,
+            linear_url: None,
+            anytype_url: None,
+            last_synced_at: None,
+        }).await.unwrap();
+        db.upsert_spec(&SpecMapping {
+            linear_issue_id: "LIN-5".into(),
+            anytype_object_id: Some("AT-5".into()),
+            linear_url: None,
+            anytype_url: None,
+            last_synced_at: None,
+        }).await.unwrap();
+        let missing = db.specs_missing_anytype_link().await.unwrap();
+        assert!(missing.iter().any(|m| m.linear_issue_id == "LIN-4"));
+        assert!(!missing.iter().any(|m| m.linear_issue_id == "LIN-5"));
+    }
+
+    #[tokio::test]
+    async fn contract_roundtrip() {
+        let db = db().await;
+        let mapping = ContractMapping {
+            documenso_document_id: "DOC-1".into(),
+            anytype_object_id: Some("AT-C1".into()),
+            linear_issue_id: Some("LIN-C1".into()),
+            status: Some("pending".into()),
+            last_synced_at: None,
+        };
+        db.upsert_contract(&mapping).await.unwrap();
+        let got = db.get_contract_by_documenso_id("DOC-1").await.unwrap().unwrap();
+        assert_eq!(got.documenso_document_id, "DOC-1");
+        assert_eq!(got.status.as_deref(), Some("pending"));
+    }
+
+    #[tokio::test]
+    async fn contract_not_found_returns_none() {
+        let db = db().await;
+        let got = db.get_contract_by_documenso_id("MISSING").await.unwrap();
+        assert!(got.is_none());
+    }
+
+    #[tokio::test]
+    async fn event_log_insert() {
+        let db = db().await;
+        db.log_event("github", "issue.opened", "42", Some(r#"{"x":1}"#)).await.unwrap();
+        db.log_event("linear", "issue.created", "LIN-99", None).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn feedback_ticket_insert_and_query() {
+        let db = db().await;
+        db.insert_feedback_ticket("LIN-F1", "https://linear.app/f1", "Crash on login", "bug", "App crashes").await.unwrap();
+        db.insert_feedback_ticket("LIN-F2", "https://linear.app/f2", "Add dark mode", "feature", "Dark mode request").await.unwrap();
+
+        let bugs = db.get_feedback_by_category("bug", 10).await.unwrap();
+        assert_eq!(bugs.len(), 1);
+        assert_eq!(bugs[0].title, "Crash on login");
+
+        let features = db.get_feedback_by_category("feature", 10).await.unwrap();
+        assert_eq!(features.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn feedback_ticket_insert_ignore_on_conflict() {
+        let db = db().await;
+        db.insert_feedback_ticket("LIN-DUP", "https://linear.app/dup", "Original", "bug", "First").await.unwrap();
+        db.insert_feedback_ticket("LIN-DUP", "https://linear.app/dup", "Duplicate", "bug", "Second").await.unwrap();
+
+        let bugs = db.get_feedback_by_category("bug", 10).await.unwrap();
+        assert_eq!(bugs.len(), 1);
+        assert_eq!(bugs[0].title, "Original");
+    }
+
+    #[tokio::test]
+    async fn github_linear_mapping_roundtrip() {
+        let db = db().await;
+        db.insert_github_linear_mapping(101, "owner/repo", "LIN-G1", Some("https://linear.app/g1")).await.unwrap();
+        let got = db.get_linear_issue_for_github(101, "owner/repo").await.unwrap().unwrap();
+        assert_eq!(got.linear_issue_id, "LIN-G1");
+        assert_eq!(got.linear_issue_url.as_deref(), Some("https://linear.app/g1"));
+    }
+
+    #[tokio::test]
+    async fn github_linear_mapping_reverse_lookup() {
+        let db = db().await;
+        db.insert_github_linear_mapping(202, "owner/repo", "LIN-G2", None).await.unwrap();
+        let got = db.get_github_issue_for_linear("LIN-G2").await.unwrap().unwrap();
+        assert_eq!(got.github_issue_number, 202);
+        assert_eq!(got.github_repo, "owner/repo");
+    }
+
+    #[tokio::test]
+    async fn github_linear_mapping_not_found() {
+        let db = db().await;
+        let got = db.get_linear_issue_for_github(999, "no/repo").await.unwrap();
+        assert!(got.is_none());
+    }
+
+    #[tokio::test]
+    async fn github_linear_mapping_insert_ignore_on_conflict() {
+        let db = db().await;
+        db.insert_github_linear_mapping(303, "owner/repo", "LIN-ORIG", Some("https://linear.app/orig")).await.unwrap();
+        db.insert_github_linear_mapping(303, "owner/repo", "LIN-DUP", None).await.unwrap();
+        let got = db.get_linear_issue_for_github(303, "owner/repo").await.unwrap().unwrap();
+        assert_eq!(got.linear_issue_id, "LIN-ORIG");
     }
 }

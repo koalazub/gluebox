@@ -16,7 +16,7 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let cfg = config::Config::load()?;
-    let db = db::Db::open(&cfg.db_path)?;
+    let db = db::Db::open(&cfg.db_path, cfg.turso.as_ref()).await?;
 
     let anytype = connectors::anytype::AnytypeClient::new(
         &cfg.anytype.api_url,

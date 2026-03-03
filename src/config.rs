@@ -11,6 +11,21 @@ pub struct Config {
     pub matrix: MatrixConfig,
     pub documenso: DocumensoConfig,
     pub opencode: Option<OpenCodeConfig>,
+    pub turso: Option<TursoConfig>,
+    pub github: Option<GithubConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct TursoConfig {
+    pub url: String,
+    pub auth_token: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct GithubConfig {
+    pub token: String,
+    pub repo: String,
+    pub webhook_secret: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -37,6 +52,7 @@ pub struct MatrixConfig {
     pub homeserver_url: String,
     pub access_token: String,
     pub room_id: String,
+    pub feedback_room_id: Option<String>,
     pub bot_username: Option<String>,
     pub bot_password: Option<String>,
 }

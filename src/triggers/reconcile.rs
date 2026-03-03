@@ -6,8 +6,8 @@ use crate::connectors::linear::LinearClient;
 pub async fn run_nightly(state: &Arc<AppState>) -> anyhow::Result<()> {
     tracing::info!("trigger 8: starting nightly reconciliation");
 
-    let missing_anytype = state.db.specs_missing_anytype_link()?;
-    let missing_linear = state.db.specs_missing_linear_id()?;
+    let missing_anytype = state.db.specs_missing_anytype_link().await?;
+    let missing_linear = state.db.specs_missing_linear_id().await?;
 
     tracing::info!(
         missing_anytype = missing_anytype.len(),
@@ -43,7 +43,7 @@ pub async fn run_nightly(state: &Arc<AppState>) -> anyhow::Result<()> {
             linear_url: Some(issue.url),
             anytype_url: None,
             last_synced_at: None,
-        })?;
+        }).await?;
 
         tracing::info!(linear_id = %spec.linear_issue_id, anytype_id = %obj.id, "reconcile: created missing anytype spec");
     }

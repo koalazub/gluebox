@@ -21,7 +21,8 @@ space_id = "your-anytype-space-id"
 [matrix]
 homeserver_url = "https://matrix-client.matrix.org"
 access_token = "your-matrix-access-token"
-room_id = "!your-encrypted-room-id:matrix.org"
+room_id = "!your-main-room-id:matrix.org"
+feedback_room_id = "!your-feedback-room-id:matrix.org"
 bot_username = "your-bot-username"
 bot_password = "your-bot-password"
 
@@ -32,3 +33,14 @@ webhook_secret = "your-documenso-webhook-secret"
 
 [opencode]
 api_key = "your-opencode-zen-api-key"
+
+# Optional: Turso cloud database. If omitted, falls back to local libSQL at db_path.
+[turso]
+url = "libsql://your-db-name.turso.io"
+auth_token = "your-turso-auth-token"
+
+# Optional: GitHub integration for bidirectional issue sync with Linear.
+[github]
+token = "ghp_your-github-token"
+repo = "your-org/your-repo"
+webhook_secret = "your-github-webhook-secret"

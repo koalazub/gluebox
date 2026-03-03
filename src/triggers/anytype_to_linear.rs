@@ -6,7 +6,7 @@ pub async fn anytype_spec_changed(
     state: &Arc<AppState>,
     anytype_object_id: &str,
 ) -> anyhow::Result<()> {
-    let Some(mapping) = state.db.get_spec_by_anytype_id(anytype_object_id)? else {
+    let Some(mapping) = state.db.get_spec_by_anytype_id(anytype_object_id).await? else {
         tracing::debug!(anytype_object_id, "no spec mapping for this anytype object");
         return Ok(());
     };

@@ -27,7 +27,7 @@ pub async fn documenso_completed(state: &Arc<AppState>, payload: &WebhookPayload
         doc.completed_at.as_deref().unwrap_or("unknown"),
     );
 
-    let existing = state.db.get_contract_by_documenso_id(&doc_id)?;
+    let existing = state.db.get_contract_by_documenso_id(&doc_id).await?;
 
     let anytype_id = if let Some(ref m) = existing {
         if let Some(ref aid) = m.anytype_object_id {
@@ -51,7 +51,7 @@ pub async fn documenso_completed(state: &Arc<AppState>, payload: &WebhookPayload
         linear_issue_id: existing.and_then(|m| m.linear_issue_id),
         status: Some("completed".to_string()),
         last_synced_at: None,
-    })?;
+    }).await?;
 
     to_matrix::notify_contract_event(
         state, "Completed", &doc.title, &parties,
@@ -84,7 +84,7 @@ pub async fn documenso_rejected(state: &Arc<AppState>, payload: &WebhookPayload)
         if rejection_reasons.is_empty() { "unknown".to_string() } else { rejection_reasons.join("; ") },
     );
 
-    let existing = state.db.get_contract_by_documenso_id(&doc_id)?;
+    let existing = state.db.get_contract_by_documenso_id(&doc_id).await?;
 
     if let Some(ref m) = existing {
         if let Some(ref aid) = m.anytype_object_id {
@@ -100,7 +100,7 @@ pub async fn documenso_rejected(state: &Arc<AppState>, payload: &WebhookPayload)
         linear_issue_id: existing.as_ref().and_then(|m| m.linear_issue_id.clone()),
         status: Some("rejected".to_string()),
         last_synced_at: None,
-    })?;
+    }).await?;
 
     to_matrix::notify_contract_event(
         state, "Rejected", &doc.title, &description,

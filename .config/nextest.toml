@@ -1,0 +1,7 @@
+[profile.default]
+fail-fast = false
+
+[profile.ci]
+fail-fast = true
+retries = 1
+test-threads = 4
