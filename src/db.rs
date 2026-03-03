@@ -16,6 +16,15 @@ pub struct SpecMapping {
 }
 
 #[derive(Debug, Clone)]
+pub struct FeedbackTicket {
+    pub linear_issue_id: String,
+    pub linear_issue_url: String,
+    pub title: String,
+    pub category: String,
+    pub description: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct ContractMapping {
     pub documenso_document_id: String,
     pub anytype_object_id: Option<String>,
@@ -62,10 +71,20 @@ impl Db {
                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
 
+            CREATE TABLE IF NOT EXISTS feedback_tickets (
+                linear_issue_id TEXT PRIMARY KEY,
+                linear_issue_url TEXT NOT NULL,
+                title TEXT NOT NULL,
+                category TEXT NOT NULL,
+                description TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
             CREATE INDEX IF NOT EXISTS idx_spec_anytype ON spec_mappings(anytype_object_id);
             CREATE INDEX IF NOT EXISTS idx_contract_anytype ON contract_mappings(anytype_object_id);
             CREATE INDEX IF NOT EXISTS idx_contract_linear ON contract_mappings(linear_issue_id);
-            CREATE INDEX IF NOT EXISTS idx_event_log_ext ON event_log(source, external_id);"
+            CREATE INDEX IF NOT EXISTS idx_event_log_ext ON event_log(source, external_id);
+            CREATE INDEX IF NOT EXISTS idx_feedback_category ON feedback_tickets(category);"
         )?;
         Ok(())
     }
@@ -183,6 +202,51 @@ impl Db {
             params![source, event_type, external_id, payload],
         )?;
         Ok(())
+    }
+
+    pub fn insert_feedback_ticket(
+        &self,
+        linear_issue_id: &str,
+        linear_issue_url: &str,
+        title: &str,
+        category: &str,
+        description: &str,
+    ) -> anyhow::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT OR IGNORE INTO feedback_tickets
+             (linear_issue_id, linear_issue_url, title, category, description)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![linear_issue_id, linear_issue_url, title, category, description],
+        )?;
+        Ok(())
+    }
+
+    /// Return all feedback tickets in the same category, up to `limit`.
+    /// Used for deduplication: compare new cluster against these before creating.
+    pub fn get_feedback_by_category(
+        &self,
+        category: &str,
+        limit: usize,
+    ) -> anyhow::Result<Vec<FeedbackTicket>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT linear_issue_id, linear_issue_url, title, category, description
+             FROM feedback_tickets
+             WHERE category = ?1
+             ORDER BY created_at DESC
+             LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![category, limit as i64], |row| {
+            Ok(FeedbackTicket {
+                linear_issue_id: row.get(0)?,
+                linear_issue_url: row.get(1)?,
+                title: row.get(2)?,
+                category: row.get(3)?,
+                description: row.get(4)?,
+            })
+        })?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
     }
 
     pub fn specs_missing_anytype_link(&self) -> anyhow::Result<Vec<SpecMapping>> {

@@ -12,6 +12,8 @@ use serde::Deserialize;
 
 use crate::AppState;
 use crate::triggers;
+use crate::connectors::opencode::OpenCodeClient;
+use crate::openclaw::process_feedback_clusters;
 
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
@@ -19,6 +21,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/webhooks/linear", post(handle_linear))
         .route("/webhooks/documenso", post(handle_documenso))
         .route("/api/notify", post(handle_notify))
+        .route("/api/feedback", post(handle_feedback))
         .with_state(state)
 }
 
@@ -147,6 +150,59 @@ enum NotifyFormat {
     #[default]
     Plain,
     Markdown,
+}
+
+#[derive(Deserialize)]
+struct FeedbackRequest {
+    message: String,
+}
+
+async fn handle_feedback(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(req): Json<FeedbackRequest>,
+) -> (StatusCode, axum::Json<serde_json::Value>) {
+    let Some(ref secret) = state.cfg.notify_secret else {
+        return (StatusCode::NOT_FOUND, axum::Json(serde_json::json!({"error": "not configured"})));
+    };
+
+    let provided = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .unwrap_or("");
+
+    if !verify::constant_time_eq_pub(provided.as_bytes(), secret.as_bytes()) {
+        return (StatusCode::UNAUTHORIZED, axum::Json(serde_json::json!({"error": "unauthorized"})));
+    }
+
+    let Some(ref opencode_cfg) = state.cfg.opencode else {
+        return (StatusCode::SERVICE_UNAVAILABLE, axum::Json(serde_json::json!({"error": "opencode not configured"})));
+    };
+
+    let ai = std::sync::Arc::new(OpenCodeClient::new(&opencode_cfg.api_key));
+
+    let clusters = match ai.extract_and_cluster_feedback(&req.message).await {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!(error = %e, "feedback api: failed to cluster feedback");
+            return (StatusCode::INTERNAL_SERVER_ERROR, axum::Json(serde_json::json!({"error": e.to_string()})));
+        }
+    };
+
+    if clusters.is_empty() {
+        return (StatusCode::OK, axum::Json(serde_json::json!({
+            "clusters_processed": 0,
+            "results": []
+        })));
+    }
+
+    let results = process_feedback_clusters(&state, &ai, &clusters).await;
+
+    (StatusCode::OK, axum::Json(serde_json::json!({
+        "clusters_processed": clusters.len(),
+        "results": results,
+    })))
 }
 
 async fn handle_notify(

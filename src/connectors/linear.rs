@@ -47,7 +47,7 @@ impl LinearClient {
         }
     }
 
-    async fn graphql(&self, query: &str, variables: Option<Value>) -> anyhow::Result<Value> {
+    pub(crate) async fn graphql(&self, query: &str, variables: Option<Value>) -> anyhow::Result<Value> {
         let body = json!({
             "query": query,
             "variables": variables.unwrap_or(json!({})),
@@ -155,6 +155,102 @@ impl LinearClient {
         });
         self.graphql(query, Some(vars)).await?;
         Ok(())
+    }
+
+    /// Find an existing label by name (case-insensitive), or create it.
+    /// Returns the label ID.
+    pub async fn get_or_create_label(
+        &self,
+        team_id: &str,
+        name: &str,
+        color: &str,
+    ) -> anyhow::Result<String> {
+        // Fetch existing labels for the team
+        let query = r#"
+            query($teamId: String!) {
+                team(id: $teamId) { labels { nodes { id name } } }
+            }
+        "#;
+        let resp = self.graphql(query, Some(json!({ "teamId": team_id }))).await?;
+        let labels = resp["data"]["team"]["labels"]["nodes"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+
+        for label in &labels {
+            if label["name"]
+                .as_str()
+                .map(|s| s.eq_ignore_ascii_case(name))
+                .unwrap_or(false)
+            {
+                return Ok(label["id"].as_str().unwrap_or_default().to_string());
+            }
+        }
+
+        // Create the label if not found
+        let create = r#"
+            mutation($input: IssueLabelCreateInput!) {
+                issueLabelCreate(input: $input) { issueLabel { id } }
+            }
+        "#;
+        let resp = self
+            .graphql(
+                create,
+                Some(json!({
+                    "input": { "teamId": team_id, "name": name, "color": color }
+                })),
+            )
+            .await?;
+        let id = resp["data"]["issueLabelCreate"]["issueLabel"]["id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("failed to create label '{name}'"))?
+            .to_string();
+        Ok(id)
+    }
+
+    /// Create an issue tagged with one label. Returns the full response Value.
+    pub async fn create_issue_with_label(
+        &self,
+        title: &str,
+        description: &str,
+        team_id: &str,
+        label_id: &str,
+    ) -> anyhow::Result<Value> {
+        let query = r#"
+            mutation($input: IssueCreateInput!) {
+                issueCreate(input: $input) {
+                    success
+                    issue { id title url }
+                }
+            }
+        "#;
+        let vars = json!({
+            "input": {
+                "title": title,
+                "description": description,
+                "teamId": team_id,
+                "labelIds": [label_id],
+            }
+        });
+        self.graphql(query, Some(vars)).await
+    }
+
+    /// Add a comment to an existing issue noting a duplicate piece of feedback.
+    pub async fn add_feedback_comment(
+        &self,
+        issue_id: &str,
+        feedback_items: &[String],
+        source_note: &str,
+    ) -> anyhow::Result<()> {
+        let items = feedback_items
+            .iter()
+            .map(|i| format!("- {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let body = format!(
+            "**Additional feedback received** ({source_note}):\n\n{items}"
+        );
+        self.add_comment(issue_id, &body).await
     }
 
     pub async fn create_issue(&self, title: &str, description: &str, team_id: Option<&str>) -> anyhow::Result<Value> {

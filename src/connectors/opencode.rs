@@ -177,6 +177,7 @@ Examples:
             "spec" => IntentKind::Spec,
             "decision" => IntentKind::Decision,
             "issue" => IntentKind::Issue,
+            "feedback" => IntentKind::Feedback,
             _ => IntentKind::Chat,
         };
 
@@ -187,6 +188,100 @@ Examples:
         let system = r#"You are a helpful engineering assistant in a team chat room. Keep replies concise and technical. Use markdown formatting."#;
         self.chat(system, message, 2000).await
     }
+
+    /// Extract discrete feedback items from a message, cluster similar ones,
+    /// and categorise each cluster. Returns an array ready to file as tickets.
+    pub async fn extract_and_cluster_feedback(
+        &self,
+        message: &str,
+    ) -> anyhow::Result<Vec<FeedbackCluster>> {
+        let system = r#"You are a product feedback analyst. Extract discrete feedback items from the user message, cluster similar ones together, and categorise each cluster.
+
+Output ONLY a JSON array (no markdown, no code fences). Each element must have:
+- "title": short actionable title under 80 chars, suitable for a Linear issue
+- "description": detailed description with what the user wants and why, suitable for a Linear issue body
+- "category": exactly one of: "bug" | "feature" | "ux" | "performance" | "docs" | "other"
+- "items": array of verbatim or closely paraphrased individual feedback points in this cluster
+
+Rules:
+- Merge feedback items that describe the same root problem into one cluster
+- Do NOT merge unrelated feedback just to reduce count
+- If there is only one distinct topic, return a single-element array
+- Ignore greetings, meta-commentary, and off-topic content"#;
+
+        let response = self.chat(system, message, 3000).await?;
+        let cleaned = response
+            .trim()
+            .trim_start_matches("```json")
+            .trim_start_matches("```")
+            .trim_end_matches("```")
+            .trim();
+
+        let clusters: Vec<FeedbackCluster> = serde_json::from_str(cleaned)
+            .map_err(|e| anyhow::anyhow!("failed to parse feedback clusters: {e}\nRaw: {}", &cleaned[..cleaned.len().min(400)]))?;
+
+        Ok(clusters)
+    }
+
+    /// Given a new cluster title+description and a list of existing issue
+    /// summaries, return the ID of the matching existing issue if this is a
+    /// duplicate, or None if it is genuinely new.
+    pub async fn find_duplicate_issue(
+        &self,
+        cluster: &FeedbackCluster,
+        existing: &[ExistingIssueSummary],
+    ) -> anyhow::Result<Option<String>> {
+        if existing.is_empty() {
+            return Ok(None);
+        }
+
+        let existing_json = serde_json::to_string(existing)?;
+
+        let user_prompt = format!(
+            "New feedback cluster:\nTitle: {}\nDescription: {}\nCategory: {}\n\nExisting issues:\n{}",
+            cluster.title, cluster.description, cluster.category, existing_json
+        );
+
+        let system = r#"You are deduplicating product feedback against existing Linear issues.
+
+Given a new feedback cluster and a list of existing issues, determine if the new cluster describes the SAME root problem as any existing issue.
+
+Criteria for a duplicate:
+- Same underlying user pain point or request (even if described differently)
+- Same category
+- A comment on the existing issue would be more appropriate than a new ticket
+
+Output ONLY a JSON object (no markdown):
+- {"duplicate": true, "id": "<issue_id>"} if it matches an existing issue
+- {"duplicate": false} if it is genuinely new
+
+Be conservative: only mark as duplicate when confident. Different symptoms of the same system can be separate issues."#;
+
+        let response = self.chat(system, &user_prompt, 300).await?;
+        let cleaned = response
+            .trim()
+            .trim_start_matches("```json")
+            .trim_start_matches("```")
+            .trim_end_matches("```")
+            .trim();
+
+        let parsed: serde_json::Value = serde_json::from_str(cleaned)
+            .unwrap_or_else(|_| serde_json::json!({"duplicate": false}));
+
+        if parsed["duplicate"].as_bool().unwrap_or(false) {
+            Ok(parsed["id"].as_str().map(|s| s.to_string()))
+        } else {
+            Ok(None)
+        }
+    }
+}
+
+/// Lightweight summary of an existing Linear issue used for deduplication.
+#[derive(Debug, serde::Serialize)]
+pub struct ExistingIssueSummary {
+    pub id: String,
+    pub title: String,
+    pub category: String,
 }
 
 pub struct Intent {
@@ -199,5 +294,16 @@ pub enum IntentKind {
     Spec,
     Decision,
     Issue,
+    Feedback,
     Chat,
+}
+
+/// A cluster of related feedback items extracted from one or more messages.
+#[derive(Debug, serde::Deserialize)]
+pub struct FeedbackCluster {
+    pub title: String,
+    pub description: String,
+    /// One of: "bug" | "feature" | "ux" | "performance" | "docs" | "other"
+    pub category: String,
+    pub items: Vec<String>,
 }
