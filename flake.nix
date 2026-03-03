@@ -62,14 +62,11 @@
               ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isDarwin [ pkgs.apple-sdk_15 ];
           };
 
-          cargoArtifacts = craneLib.buildDepsOnly (commonArgs // {
-            buildPhaseCargoCommand = "cargo build --release --locked";
-          });
+          cargoArtifacts = craneLib.buildDepsOnly commonArgs;
         in
         {
           package = craneLib.buildPackage (commonArgs // {
             inherit cargoArtifacts;
-            cargoExtraArgs = "--release";
             meta = {
               description = "Glue layer syncing Linear, Anytype, Matrix, and Documenso";
               mainProgram = "gluebox";
