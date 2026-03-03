@@ -2,6 +2,7 @@ use crate::AppState;
 use crate::connectors::matrix::MatrixBot;
 use crate::connectors::opencode::{OpenCodeClient, ExistingIssueSummary, FeedbackCluster, IntentKind};
 use crate::connectors::linear::LinearClient;
+use crate::triggers::to_matrix;
 use std::sync::Arc;
 use matrix_sdk::{
     config::SyncSettings,
@@ -346,6 +347,16 @@ pub async fn process_feedback_clusters(
                 results.push(format!("**[{}]** Failed to create issue for \"{}\": {e}", label_name, cluster.title));
             }
         }
+    }
+
+    if !results.is_empty() {
+        let summary = format!(
+            "**Feedback processed** ({} cluster{}):\n\n{}",
+            clusters.len(),
+            if clusters.len() == 1 { "" } else { "s" },
+            results.join("\n"),
+        );
+        to_matrix::notify_feedback_room(state, &summary).await;
     }
 
     results

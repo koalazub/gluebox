@@ -12,6 +12,7 @@ use serde::Deserialize;
 
 use crate::AppState;
 use crate::triggers;
+use crate::triggers::to_matrix;
 use crate::connectors::opencode::OpenCodeClient;
 use crate::openclaw::process_feedback_clusters;
 
@@ -20,6 +21,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/health", get(health))
         .route("/webhooks/linear", post(handle_linear))
         .route("/webhooks/documenso", post(handle_documenso))
+        .route("/webhooks/github", post(handle_github))
         .route("/api/notify", post(handle_notify))
         .route("/api/feedback", post(handle_feedback))
         .with_state(state)
@@ -71,7 +73,17 @@ async fn handle_linear(
     }
 
     let result = match (event_type, action) {
-        ("Issue", "create") => triggers::linear_issue_created(&state, &payload).await,
+        ("Issue", "create") => {
+            let title = payload["data"]["title"].as_str().unwrap_or("(untitled)");
+            let url = payload["url"].as_str().unwrap_or("");
+            to_matrix::notify_ticket_created(&state, title, url, None).await;
+
+            let spec_result = triggers::linear_issue_created(&state, &payload).await;
+            if let Err(e) = triggers::linear_issue_github_sync(&state, &payload).await {
+                tracing::error!(%e, "linear→github sync failed");
+            }
+            spec_result
+        }
         ("Issue", "update") => triggers::linear_issue_updated(&state, &payload).await,
         _ => {
             tracing::debug!(event_type, action, "unhandled linear event");
@@ -83,6 +95,67 @@ async fn handle_linear(
         Ok(()) => StatusCode::OK,
         Err(e) => {
             tracing::error!(%e, "trigger processing failed");
+            StatusCode::INTERNAL_SERVER_ERROR
+        }
+    }
+}
+
+async fn handle_github(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> StatusCode {
+    let Some(gh_cfg) = &state.cfg.github else {
+        return StatusCode::NOT_FOUND;
+    };
+
+    let signature = headers
+        .get("x-hub-signature-256")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    if !verify::github_signature(signature, &body, &gh_cfg.webhook_secret) {
+        tracing::warn!("github webhook signature verification failed");
+        return StatusCode::UNAUTHORIZED;
+    }
+
+    let payload: serde_json::Value = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!(%e, "failed to parse github webhook body");
+            return StatusCode::BAD_REQUEST;
+        }
+    };
+
+    let event = headers
+        .get("x-github-event")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    let action = payload["action"].as_str().unwrap_or("");
+
+    tracing::info!(event, action, "github webhook received");
+
+    if let Err(e) = state.db.log_event(
+        "github",
+        &format!("{event}.{action}"),
+        &payload["issue"]["number"].to_string(),
+        None,
+    ).await {
+        tracing::error!(%e, "failed to log github event");
+    }
+
+    let result = match (event, action) {
+        ("issues", "opened") => triggers::github_issue_opened(&state, &payload).await,
+        _ => {
+            tracing::debug!(event, action, "unhandled github event");
+            Ok(())
+        }
+    };
+
+    match result {
+        Ok(()) => StatusCode::OK,
+        Err(e) => {
+            tracing::error!(%e, "github trigger processing failed");
             StatusCode::INTERNAL_SERVER_ERROR
         }
     }
@@ -180,7 +253,7 @@ async fn handle_feedback(
         return (StatusCode::SERVICE_UNAVAILABLE, axum::Json(serde_json::json!({"error": "opencode not configured"})));
     };
 
-    let ai = std::sync::Arc::new(OpenCodeClient::new(&opencode_cfg.api_key));
+    let ai = Arc::new(OpenCodeClient::new(&opencode_cfg.api_key));
 
     let clusters = match ai.extract_and_cluster_feedback(&req.message).await {
         Ok(c) => c,

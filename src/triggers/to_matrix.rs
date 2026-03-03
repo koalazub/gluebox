@@ -1,21 +1,33 @@
 use std::sync::Arc;
 use crate::AppState;
 
-#[allow(dead_code)]
-pub async fn notify_state_change(
-    state: &Arc<AppState>,
-    issue_title: &str,
-    new_state: &str,
-    linear_url: &str,
-) -> anyhow::Result<()> {
-    let msg = format!("[{new_state}] {issue_title}\n{linear_url}");
-
-    if let Some(bot) = &state.matrix_bot {
-        bot.send_message(&msg).await?;
+pub async fn notify_matrix(state: &Arc<AppState>, msg: &str) {
+    let Some(bot) = &state.matrix_bot else { return };
+    if let Err(e) = bot.send_message(msg).await {
+        tracing::error!(%e, "failed to send matrix notification");
     }
+}
 
-    tracing::info!(issue_title, new_state, "trigger 5: state change pinged to matrix");
-    Ok(())
+pub async fn notify_feedback_room(state: &Arc<AppState>, markdown: &str) {
+    let (Some(bot), Some(room_id)) = (&state.matrix_bot, &state.cfg.matrix.feedback_room_id) else {
+        return;
+    };
+    if let Err(e) = bot.send_markdown_to_room(room_id, markdown).await {
+        tracing::error!(%e, "failed to send to matrix feedback room");
+    }
+}
+
+pub async fn notify_ticket_created(
+    state: &Arc<AppState>,
+    title: &str,
+    primary_url: &str,
+    cross_link: Option<(&str, &str)>,
+) {
+    let msg = match cross_link {
+        Some((label, url)) => format!("New ticket: {title}\n{primary_url}\n{label}: {url}"),
+        None => format!("New ticket: {title}\n{primary_url}"),
+    };
+    notify_matrix(state, &msg).await;
 }
 
 pub async fn notify_contract_event(
@@ -25,10 +37,8 @@ pub async fn notify_contract_event(
     detail: &str,
 ) -> anyhow::Result<()> {
     let msg = format!("[Documenso: {event}] {title}\n{detail}");
-
     if let Some(bot) = &state.matrix_bot {
         bot.send_message(&msg).await?;
     }
-
     Ok(())
 }

@@ -4,6 +4,7 @@ use crate::AppState;
 use crate::connectors::anytype::AnytypeClient;
 use crate::connectors::linear::LinearClient;
 use crate::db::SpecMapping;
+use super::to_matrix;
 
 fn has_label(payload: &Value, label_name: &str) -> bool {
     payload["data"]["labels"]
@@ -20,14 +21,6 @@ fn state_name(payload: &Value) -> Option<&str> {
 
 fn state_type(payload: &Value) -> Option<&str> {
     payload["data"]["state"]["type"].as_str()
-}
-
-async fn notify_matrix(state: &Arc<AppState>, msg: &str) {
-    if let Some(bot) = &state.matrix_bot {
-        if let Err(e) = bot.send_message(msg).await {
-            tracing::error!(%e, "failed to send matrix notification");
-        }
-    }
 }
 
 pub async fn linear_issue_created(state: &Arc<AppState>, payload: &Value) -> anyhow::Result<()> {
@@ -73,9 +66,7 @@ pub async fn linear_issue_created(state: &Arc<AppState>, payload: &Value) -> any
     );
     linear.update_issue_description(issue_id, &link_text).await?;
 
-    notify_matrix(state, &format!("New Spec: {title}\n{url}")).await;
-
-    tracing::info!(issue_id, anytype_id = %obj.id, "spec created in anytype, link written back to linear, matrix notified");
+    tracing::info!(issue_id, anytype_id = %obj.id, "spec created in anytype, link written back to linear");
     Ok(())
 }
 
@@ -128,7 +119,7 @@ pub async fn linear_issue_updated(state: &Arc<AppState>, payload: &Value) -> any
             let issue_title = title.unwrap_or("(untitled)");
             let linear_url = payload["url"].as_str().unwrap_or("");
 
-            notify_matrix(state, &format!("Shipped: {issue_title}\n{linear_url}")).await;
+            to_matrix::notify_matrix(state, &format!("Shipped: {issue_title}\n{linear_url}")).await;
 
             tracing::info!(issue_id, "shipped notification sent to matrix");
         }
@@ -136,7 +127,7 @@ pub async fn linear_issue_updated(state: &Arc<AppState>, payload: &Value) -> any
         if current_state == Some("In Progress") || current_state == Some("In Review") {
             let issue_title = title.unwrap_or("(untitled)");
             let linear_url = payload["url"].as_str().unwrap_or("");
-            notify_matrix(state, &format!("{}: {issue_title}\n{linear_url}", current_state.unwrap_or("Updated"))).await;
+            to_matrix::notify_matrix(state, &format!("{}: {issue_title}\n{linear_url}", current_state.unwrap_or("Updated"))).await;
         }
     }
 
