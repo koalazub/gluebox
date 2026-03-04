@@ -12,12 +12,6 @@ pub async fn documenso_completed(state: &Arc<AppState>, payload: &WebhookPayload
 
     tracing::info!(doc_id, title = %doc.title, "trigger 6: document completed");
 
-    let anytype = AnytypeClient::new(
-        &state.cfg.anytype.api_url,
-        &state.cfg.anytype.api_key,
-        &state.cfg.anytype.space_id,
-    );
-
     let parties = doc.recipients.as_ref()
         .map(|r| r.iter().map(|p| format!("{} <{}>", p.name, p.email)).collect::<Vec<_>>().join(", "))
         .unwrap_or_default();
@@ -29,25 +23,30 @@ pub async fn documenso_completed(state: &Arc<AppState>, payload: &WebhookPayload
 
     let existing = state.db.get_contract_by_documenso_id(&doc_id).await?;
 
-    let anytype_id = if let Some(ref m) = existing {
-        if let Some(ref aid) = m.anytype_object_id {
-            anytype.update_object(aid, json!({
-                "name": doc.title,
-                "description": description,
-            })).await?;
-            aid.clone()
+    let anytype_id = if let Some(ref at_cfg) = state.cfg.anytype {
+        let anytype = AnytypeClient::new(&at_cfg.api_url, &at_cfg.api_key, &at_cfg.space_id);
+        if let Some(ref m) = existing {
+            if let Some(ref aid) = m.anytype_object_id {
+                anytype.update_object(aid, json!({
+                    "name": doc.title,
+                    "description": description,
+                })).await?;
+                Some(aid.clone())
+            } else {
+                let obj = anytype.create_object("contract", &doc.title, &description, None).await?;
+                Some(obj.id)
+            }
         } else {
             let obj = anytype.create_object("contract", &doc.title, &description, None).await?;
-            obj.id
+            Some(obj.id)
         }
     } else {
-        let obj = anytype.create_object("contract", &doc.title, &description, None).await?;
-        obj.id
+        existing.as_ref().and_then(|m| m.anytype_object_id.clone())
     };
 
     state.db.upsert_contract(&ContractMapping {
         documenso_document_id: doc_id.clone(),
-        anytype_object_id: Some(anytype_id),
+        anytype_object_id: anytype_id,
         linear_issue_id: existing.and_then(|m| m.linear_issue_id),
         status: Some("completed".to_string()),
         last_synced_at: None,
@@ -66,12 +65,6 @@ pub async fn documenso_rejected(state: &Arc<AppState>, payload: &WebhookPayload)
 
     tracing::info!(doc_id, title = %doc.title, "trigger 7: document rejected/expired");
 
-    let anytype = AnytypeClient::new(
-        &state.cfg.anytype.api_url,
-        &state.cfg.anytype.api_key,
-        &state.cfg.anytype.space_id,
-    );
-
     let rejection_reasons: Vec<String> = doc.recipients.as_ref()
         .map(|r| r.iter()
             .filter(|p| p.signing_status == "REJECTED")
@@ -86,11 +79,14 @@ pub async fn documenso_rejected(state: &Arc<AppState>, payload: &WebhookPayload)
 
     let existing = state.db.get_contract_by_documenso_id(&doc_id).await?;
 
-    if let Some(ref m) = existing {
-        if let Some(ref aid) = m.anytype_object_id {
-            anytype.update_object(aid, json!({
-                "description": description,
-            })).await?;
+    if let Some(ref at_cfg) = state.cfg.anytype {
+        if let Some(ref m) = existing {
+            if let Some(ref aid) = m.anytype_object_id {
+                let anytype = AnytypeClient::new(&at_cfg.api_url, &at_cfg.api_key, &at_cfg.space_id);
+                anytype.update_object(aid, json!({
+                    "description": description,
+                })).await?;
+            }
         }
     }
 

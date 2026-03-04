@@ -18,12 +18,14 @@ async fn main() -> anyhow::Result<()> {
     let cfg = config::Config::load()?;
     let db = db::Db::open(&cfg.db_path, cfg.turso.as_ref()).await?;
 
-    let anytype = connectors::anytype::AnytypeClient::new(
-        &cfg.anytype.api_url,
-        &cfg.anytype.api_key,
-        &cfg.anytype.space_id,
-    );
-    anytype.ensure_types().await?;
+    if let Some(ref at_cfg) = cfg.anytype {
+        let anytype = connectors::anytype::AnytypeClient::new(
+            &at_cfg.api_url,
+            &at_cfg.api_key,
+            &at_cfg.space_id,
+        );
+        anytype.ensure_types().await?;
+    }
 
     let matrix_bot = if let (Some(username), Some(password)) = (&cfg.matrix.bot_username, &cfg.matrix.bot_password) {
         let data_dir = dirs::data_dir()

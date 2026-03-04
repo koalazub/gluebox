@@ -34,13 +34,14 @@ pub async fn linear_issue_created(state: &Arc<AppState>, payload: &Value) -> any
     let description = payload["data"]["description"].as_str().unwrap_or_default();
     let url = payload["url"].as_str().unwrap_or_default();
 
+    let Some(ref at_cfg) = state.cfg.anytype else {
+        tracing::debug!(issue_id, "anytype not configured, skipping spec sync");
+        return Ok(());
+    };
+
     tracing::info!(issue_id, title, "trigger 1: spec-labeled issue created, upserting anytype Spec");
 
-    let anytype = AnytypeClient::new(
-        &state.cfg.anytype.api_url,
-        &state.cfg.anytype.api_key,
-        &state.cfg.anytype.space_id,
-    );
+    let anytype = AnytypeClient::new(&at_cfg.api_url, &at_cfg.api_key, &at_cfg.space_id);
 
     let body_md = format!("**Linear Issue:** [{title}]({url})\n\n{description}");
     let obj = match anytype.create_object("spec", title, description, Some(&body_md)).await {
@@ -72,55 +73,50 @@ pub async fn linear_issue_created(state: &Arc<AppState>, payload: &Value) -> any
 
 pub async fn linear_issue_updated(state: &Arc<AppState>, payload: &Value) -> anyhow::Result<()> {
     let issue_id = payload["data"]["id"].as_str().unwrap_or_default();
-
-    let Some(mapping) = state.db.get_spec_by_linear_id(issue_id).await? else {
-        tracing::debug!(issue_id, "no spec mapping for this issue, skipping");
-        return Ok(());
-    };
-
-    let Some(anytype_id) = &mapping.anytype_object_id else {
-        tracing::debug!(issue_id, "spec mapping has no anytype id yet, skipping");
-        return Ok(());
-    };
-
     let title = payload["data"]["title"].as_str();
     let description = payload["data"]["description"].as_str();
     let _priority = payload["data"]["priority"].as_f64();
     let current_state = state_name(payload);
 
-    let mut updates = json!({});
-    if let Some(t) = title {
-        updates["name"] = json!(t);
-    }
-    if let Some(d) = description {
-        updates["description"] = json!(d);
-    }
+    if let Some(ref at_cfg) = state.cfg.anytype {
+        let Some(mapping) = state.db.get_spec_by_linear_id(issue_id).await? else {
+            tracing::debug!(issue_id, "no spec mapping for this issue, skipping anytype sync");
+            return Ok(());
+        };
 
-    let anytype = AnytypeClient::new(
-        &state.cfg.anytype.api_url,
-        &state.cfg.anytype.api_key,
-        &state.cfg.anytype.space_id,
-    );
+        if let Some(anytype_id) = &mapping.anytype_object_id {
+            let mut updates = json!({});
+            if let Some(t) = title {
+                updates["name"] = json!(t);
+            }
+            if let Some(d) = description {
+                updates["description"] = json!(d);
+            }
 
-    if updates.as_object().map(|o| !o.is_empty()).unwrap_or(false) {
-        tracing::info!(issue_id, anytype_id, "trigger 2: patching anytype spec");
-        anytype.update_object(anytype_id, updates).await?;
+            let anytype = AnytypeClient::new(&at_cfg.api_url, &at_cfg.api_key, &at_cfg.space_id);
+
+            if updates.as_object().map(|o| !o.is_empty()).unwrap_or(false) {
+                tracing::info!(issue_id, anytype_id, "trigger 2: patching anytype spec");
+                anytype.update_object(anytype_id, updates).await?;
+            }
+
+            if let Some(stype) = state_type(payload) {
+                if stype == "completed" || current_state == Some("Shipped") || current_state == Some("Done") {
+                    tracing::info!(issue_id, "trigger 3: issue shipped, updating anytype");
+                    anytype.update_object(anytype_id, json!({
+                        "description": format!("Status: Shipped\n\n{}",
+                            description.unwrap_or_default()),
+                    })).await?;
+                }
+            }
+        }
     }
 
     if let Some(stype) = state_type(payload) {
         if stype == "completed" || current_state == Some("Shipped") || current_state == Some("Done") {
-            tracing::info!(issue_id, "trigger 3: issue shipped, updating anytype + matrix");
-
-            anytype.update_object(anytype_id, json!({
-                "description": format!("Status: Shipped\n\n{}",
-                    description.unwrap_or_default()),
-            })).await?;
-
             let issue_title = title.unwrap_or("(untitled)");
             let linear_url = payload["url"].as_str().unwrap_or("");
-
             to_matrix::notify_matrix(state, &format!("Shipped: {issue_title}\n{linear_url}")).await;
-
             tracing::info!(issue_id, "shipped notification sent to matrix");
         }
 

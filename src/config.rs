@@ -7,7 +7,7 @@ pub struct Config {
     pub db_path: PathBuf,
     pub notify_secret: Option<String>,
     pub linear: LinearConfig,
-    pub anytype: AnytypeConfig,
+    pub anytype: Option<AnytypeConfig>,
     pub matrix: MatrixConfig,
     pub documenso: DocumensoConfig,
     pub opencode: Option<OpenCodeConfig>,
