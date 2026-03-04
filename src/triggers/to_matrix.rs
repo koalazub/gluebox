@@ -23,11 +23,16 @@ pub async fn notify_ticket_created(
     primary_url: &str,
     cross_link: Option<(&str, &str)>,
 ) {
+    let (Some(bot), Some(room_id)) = (&state.matrix_bot, &state.cfg.matrix.issues_room_id) else {
+        return;
+    };
     let msg = match cross_link {
         Some((label, url)) => format!("New ticket: {title}\n{primary_url}\n{label}: {url}"),
         None => format!("New ticket: {title}\n{primary_url}"),
     };
-    notify_matrix(state, &msg).await;
+    if let Err(e) = bot.send_to_room(room_id, &msg).await {
+        tracing::error!(%e, "failed to send to matrix issues room");
+    }
 }
 
 pub async fn notify_contract_event(
