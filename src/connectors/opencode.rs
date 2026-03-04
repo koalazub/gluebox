@@ -34,8 +34,8 @@ impl OpenCodeClient {
         Self {
             client: reqwest::Client::new(),
             api_key: api_key.to_string(),
-            base_url: "https://opencode.ai/zen/v1".to_string(),
-            model: "trinity-large-preview-free".to_string(),
+            base_url: "https://openrouter.ai/api/v1".to_string(),
+            model: "google/gemini-2.5-flash-lite".to_string(),
         }
     }
 
