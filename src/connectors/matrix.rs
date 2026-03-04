@@ -26,28 +26,7 @@ impl MatrixBot {
     ) -> Result<Self> {
         std::fs::create_dir_all(&data_dir)?;
 
-        let client = Client::builder()
-            .homeserver_url(homeserver_url)
-            .sqlite_store(&data_dir, None)
-            .with_encryption_settings(EncryptionSettings {
-                auto_enable_cross_signing: true,
-                ..Default::default()
-            })
-            .build()
-            .await?;
-
-        if client.is_active() {
-            tracing::info!(user = %username, "matrix-sdk: restored existing session");
-        } else {
-            tracing::info!(user = %username, "matrix-sdk: logging in fresh");
-            client
-                .matrix_auth()
-                .login_username(username, password)
-                .initial_device_display_name("gluebox-bot")
-                .send()
-                .await?;
-            tracing::info!(user = %username, "matrix-sdk: logged in with E2EE support");
-        }
+        let client = Self::connect(homeserver_url, username, password, &data_dir).await?;
 
         client.encryption().wait_for_e2ee_initialization_tasks().await;
 
@@ -89,6 +68,70 @@ impl MatrixBot {
         let room_id: OwnedRoomId = room_id.parse()?;
 
         Ok(Self { client, room_id })
+    }
+
+    async fn connect(
+        homeserver_url: &str,
+        username: &str,
+        password: &str,
+        data_dir: &std::path::Path,
+    ) -> Result<Client> {
+        let client = Self::build_client(homeserver_url, data_dir).await?;
+
+        if let Some(session) = client.session() {
+            tracing::info!(
+                user = %session.meta().user_id,
+                device = %session.meta().device_id,
+                "matrix-sdk: restoring persisted session"
+            );
+            return Ok(client);
+        }
+
+        tracing::info!(user = %username, "matrix-sdk: no persisted session, logging in fresh");
+        match client
+            .matrix_auth()
+            .login_username(username, password)
+            .initial_device_display_name("gluebox-bot")
+            .send()
+            .await
+        {
+            Ok(_) => {
+                tracing::info!(
+                    user = %username,
+                    device = ?client.device_id(),
+                    "matrix-sdk: logged in, session will persist in sqlite store"
+                );
+                Ok(client)
+            }
+            Err(e) if e.to_string().contains("crypto store") || e.to_string().contains("account in the store") => {
+                tracing::warn!(error = %e, "matrix-sdk: stale crypto store, wiping and retrying");
+                drop(client);
+                let _ = std::fs::remove_dir_all(data_dir);
+                std::fs::create_dir_all(data_dir)?;
+                let fresh = Self::build_client(homeserver_url, data_dir).await?;
+                fresh
+                    .matrix_auth()
+                    .login_username(username, password)
+                    .initial_device_display_name("gluebox-bot")
+                    .send()
+                    .await?;
+                tracing::info!(user = %username, "matrix-sdk: logged in with fresh crypto store");
+                Ok(fresh)
+            }
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    async fn build_client(homeserver_url: &str, data_dir: &std::path::Path) -> Result<Client> {
+        Ok(Client::builder()
+            .homeserver_url(homeserver_url)
+            .sqlite_store(data_dir, None)
+            .with_encryption_settings(EncryptionSettings {
+                auto_enable_cross_signing: true,
+                ..Default::default()
+            })
+            .build()
+            .await?)
     }
 
     pub fn client(&self) -> &Client {
