@@ -225,9 +225,32 @@ enum NotifyFormat {
     Markdown,
 }
 
+pub struct FeedbackContext {
+    pub user: String,
+    pub url: String,
+    pub user_agent: String,
+    pub frontend_logs: String,
+    pub backend_logs: String,
+    pub screenshot_id: String,
+}
+
 #[derive(Deserialize)]
 struct FeedbackRequest {
     message: String,
+    #[serde(default)]
+    category: String,
+    #[serde(default)]
+    user: String,
+    #[serde(default)]
+    url: String,
+    #[serde(default)]
+    user_agent: String,
+    #[serde(default)]
+    frontend_logs: String,
+    #[serde(default)]
+    backend_logs: String,
+    #[serde(default)]
+    screenshot_id: String,
 }
 
 async fn handle_feedback(
@@ -257,9 +280,43 @@ async fn handle_feedback(
 
     tokio::spawn(async move {
         let ai = Arc::new(OpenCodeClient::new(&api_key));
-        match ai.extract_and_cluster_feedback(&req.message).await {
+
+        let mut llm_input = req.message.clone();
+        if !req.url.is_empty() {
+            llm_input = format!("Page: {}\n\n{}", req.url, llm_input);
+        }
+        if !req.frontend_logs.is_empty() {
+            let error_lines: Vec<&str> = req.frontend_logs
+                .lines()
+                .filter(|l| l.contains("ERROR") || l.contains("WARN"))
+                .collect();
+            if !error_lines.is_empty() {
+                llm_input.push_str("\n\nFrontend errors:\n");
+                llm_input.push_str(&error_lines.join("\n"));
+            }
+        }
+        if !req.backend_logs.is_empty() {
+            let error_lines: Vec<&str> = req.backend_logs
+                .lines()
+                .filter(|l| l.contains("ERROR") || l.contains("WARN"))
+                .collect();
+            if !error_lines.is_empty() {
+                llm_input.push_str("\n\nBackend errors:\n");
+                llm_input.push_str(&error_lines.join("\n"));
+            }
+        }
+
+        match ai.extract_and_cluster_feedback(&llm_input).await {
             Ok(clusters) if !clusters.is_empty() => {
-                let results = process_feedback_clusters(&state, &ai, &clusters).await;
+                let context = FeedbackContext {
+                    user: req.user,
+                    url: req.url,
+                    user_agent: req.user_agent,
+                    frontend_logs: req.frontend_logs,
+                    backend_logs: req.backend_logs,
+                    screenshot_id: req.screenshot_id,
+                };
+                let results = process_feedback_clusters(&state, &ai, &clusters, Some(&context)).await;
                 tracing::info!(clusters = clusters.len(), ?results, "feedback pipeline complete");
             }
             Ok(_) => tracing::info!("feedback pipeline: no clusters extracted"),

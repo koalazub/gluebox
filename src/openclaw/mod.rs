@@ -218,7 +218,7 @@ pub async fn handle_feedback(
         return Ok(());
     }
 
-    let results = process_feedback_clusters(state, ai, &clusters).await;
+    let results = process_feedback_clusters(state, ai, &clusters, None).await;
 
     let summary = format!(
         "Processed {} feedback cluster{}:\n\n{}",
@@ -235,6 +235,7 @@ pub async fn process_feedback_clusters(
     state: &Arc<AppState>,
     ai: &Arc<OpenCodeClient>,
     clusters: &[FeedbackCluster],
+    context: Option<&crate::webhook::FeedbackContext>,
 ) -> Vec<String> {
     let linear = LinearClient::new(&state.cfg.linear.api_key);
 
@@ -316,7 +317,7 @@ pub async fn process_feedback_clusters(
             }
         };
 
-        let description = build_issue_description(cluster);
+        let description = build_issue_description(cluster, context);
 
         match linear.create_issue_with_label(&cluster.title, &description, &team_id, &label_id).await {
             Ok(resp) => {
@@ -362,17 +363,60 @@ pub async fn process_feedback_clusters(
     results
 }
 
-fn build_issue_description(cluster: &FeedbackCluster) -> String {
+fn build_issue_description(
+    cluster: &FeedbackCluster,
+    context: Option<&crate::webhook::FeedbackContext>,
+) -> String {
     let items = cluster.items
         .iter()
         .map(|i| format!("- {i}"))
         .collect::<Vec<_>>()
         .join("\n");
 
-    format!(
+    let mut desc = format!(
         "{}\n\n**Reported feedback items:**\n{}",
         cluster.description, items
-    )
+    );
+
+    if let Some(ctx) = context {
+        if !ctx.url.is_empty() {
+            desc.push_str(&format!("\n\n**Page:** {}", ctx.url));
+        }
+        if !ctx.user.is_empty() {
+            desc.push_str(&format!("\n**Reporter:** {}", ctx.user));
+        }
+        if !ctx.user_agent.is_empty() {
+            desc.push_str(&format!("\n**User Agent:** {}", ctx.user_agent));
+        }
+
+        let fe_errors: Vec<&str> = ctx.frontend_logs
+            .lines()
+            .filter(|l| l.contains("ERROR") || l.contains("WARN"))
+            .collect();
+        if !fe_errors.is_empty() {
+            desc.push_str("\n\n**Frontend errors (last 5 min):**\n```\n");
+            for line in &fe_errors[..fe_errors.len().min(30)] {
+                desc.push_str(line);
+                desc.push('\n');
+            }
+            desc.push_str("```");
+        }
+
+        let be_errors: Vec<&str> = ctx.backend_logs
+            .lines()
+            .filter(|l| l.contains("ERROR") || l.contains("WARN"))
+            .collect();
+        if !be_errors.is_empty() {
+            desc.push_str("\n\n**Backend errors (last 5 min):**\n```\n");
+            for line in &be_errors[..be_errors.len().min(30)] {
+                desc.push_str(line);
+                desc.push('\n');
+            }
+            desc.push_str("```");
+        }
+    }
+
+    desc
 }
 
 #[cfg(test)]
