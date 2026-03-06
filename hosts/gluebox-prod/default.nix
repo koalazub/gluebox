@@ -138,7 +138,6 @@ in
       ExecStart = lib.concatStringsSep " " [
         "${anytypeCliPkg}/bin/anytype"
         "serve"
-        "--network-config" "/var/lib/any-sync-bundle/client-config.yml"
         "--listen-address" "127.0.0.1:31012"
         "--quiet"
       ];
