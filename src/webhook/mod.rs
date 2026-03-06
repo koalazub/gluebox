@@ -227,6 +227,9 @@ enum NotifyFormat {
 
 pub struct FeedbackContext {
     pub user: String,
+    pub user_id: String,
+    pub username: String,
+    pub submitted_at: String,
     pub url: String,
     pub user_agent: String,
     pub frontend_logs: String,
@@ -241,6 +244,12 @@ struct FeedbackRequest {
     category: String,
     #[serde(default)]
     user: String,
+    #[serde(default, rename = "user_id")]
+    user_id: String,
+    #[serde(default, rename = "username")]
+    username: String,
+    #[serde(default, rename = "submitted_at")]
+    submitted_at: String,
     #[serde(default)]
     url: String,
     #[serde(default)]
@@ -310,6 +319,9 @@ async fn handle_feedback(
             Ok(clusters) if !clusters.is_empty() => {
                 let context = FeedbackContext {
                     user: req.user,
+                    user_id: req.user_id,
+                    username: req.username,
+                    submitted_at: req.submitted_at,
                     url: req.url,
                     user_agent: req.user_agent,
                     frontend_logs: req.frontend_logs,

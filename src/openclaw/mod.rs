@@ -382,9 +382,25 @@ fn build_issue_description(
         if !ctx.url.is_empty() {
             desc.push_str(&format!("\n\n**Page:** {}", ctx.url));
         }
-        if !ctx.user.is_empty() {
-            desc.push_str(&format!("\n**Reporter:** {}", ctx.user));
+        
+        // Build reporter info with username and timestamp
+        let mut reporter_parts = vec![];
+        if !ctx.username.is_empty() && ctx.username != "anonymous" {
+            reporter_parts.push(format!("@{}", ctx.username));
+        } else if !ctx.user_id.is_empty() && ctx.user_id != "anonymous" {
+            reporter_parts.push(format!("ID: {}", ctx.user_id));
+        } else if !ctx.user.is_empty() {
+            reporter_parts.push(ctx.user.clone());
         }
+        
+        if !ctx.submitted_at.is_empty() {
+            reporter_parts.push(format!("submitted at {}", ctx.submitted_at));
+        }
+        
+        if !reporter_parts.is_empty() {
+            desc.push_str(&format!("\n**Reporter:** {}", reporter_parts.join(" ")));
+        }
+        
         if !ctx.user_agent.is_empty() {
             desc.push_str(&format!("\n**User Agent:** {}", ctx.user_agent));
         }
