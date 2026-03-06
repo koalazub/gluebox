@@ -430,6 +430,10 @@ fn build_issue_description(
             }
             desc.push_str("```");
         }
+        // Check if there's a screenshot
+        if !ctx.screenshot_id.is_empty() {
+            desc.push_str(&format!("\n\n**Screenshot:** ID `{}` (retrieve from blob storage)", ctx.screenshot_id));
+        }
     }
 
     desc

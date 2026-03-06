@@ -291,6 +291,12 @@ async fn handle_feedback(
         let ai = Arc::new(OpenCodeClient::new(&api_key));
 
         let mut llm_input = req.message.clone();
+        
+        // Add user-provided category as context for the LLM
+        if !req.category.is_empty() {
+            llm_input = format!("[Category: {}]\n\n{}", req.category, llm_input);
+        }
+        
         if !req.url.is_empty() {
             llm_input = format!("Page: {}\n\n{}", req.url, llm_input);
         }
