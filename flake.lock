@@ -17,6 +17,19 @@
         "type": "github"
       }
     },
+    "anytype-cli-linux-amd64": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1771489271,
+        "narHash": "sha256-92P5wPGPRUznQWtzk3IDyzg2+7t0XGvet2Lvi6MvqtI=",
+        "type": "tarball",
+        "url": "https://github.com/anyproto/anytype-cli/releases/download/v0.1.9/anytype-cli-v0.1.9-linux-amd64.tar.gz"
+      },
+      "original": {
+        "type": "tarball",
+        "url": "https://github.com/anyproto/anytype-cli/releases/download/v0.1.9/anytype-cli-v0.1.9-linux-amd64.tar.gz"
+      }
+    },
     "crane": {
       "locked": {
         "lastModified": 1772080396,
@@ -89,6 +102,7 @@
     "root": {
       "inputs": {
         "any-sync-bundle-src": "any-sync-bundle-src",
+        "anytype-cli-linux-amd64": "anytype-cli-linux-amd64",
         "crane": "crane",
         "deploy-rs": "deploy-rs",
         "nixpkgs": "nixpkgs",

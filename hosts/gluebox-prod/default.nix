@@ -2,6 +2,7 @@
 let
   glueboxPkg = self.packages.x86_64-linux.gluebox;
   anySyncBundlePkg = self.packages.x86_64-linux.any-sync-bundle;
+  anytypeCliPkg = self.packages.x86_64-linux.anytype-cli;
   valkeyBloomPkg = self.packages.x86_64-linux.valkey-bloom;
 in
 {
@@ -127,10 +128,34 @@ in
     };
   };
 
+  systemd.services.anytype-cli = {
+    description = "Anytype headless middleware (anytype-heart HTTP API)";
+    after = [ "network-online.target" "any-sync-bundle.service" ];
+    wants = [ "network-online.target" "any-sync-bundle.service" ];
+    wantedBy = [ "multi-user.target" ];
+    serviceConfig = {
+      Type = "simple";
+      ExecStart = lib.concatStringsSep " " [
+        "${anytypeCliPkg}/bin/anytype"
+        "serve"
+        "--network-config" "/var/lib/any-sync-bundle/client-config.yml"
+        "--listen-address" "127.0.0.1:31012"
+        "--quiet"
+      ];
+      Restart = "on-failure";
+      RestartSec = 10;
+      StateDirectory = "anytype-cli";
+      WorkingDirectory = "/var/lib/anytype-cli";
+    };
+    environment = {
+      HOME = "/var/lib/anytype-cli";
+    };
+  };
+
   systemd.services.gluebox = {
     description = "Gluebox webhook server";
-    after = [ "network-online.target" "mongodb.service" "redis.service" "any-sync-bundle.service" ];
-    wants = [ "network-online.target" "any-sync-bundle.service" ];
+    after = [ "network-online.target" "mongodb.service" "redis.service" "any-sync-bundle.service" "anytype-cli.service" ];
+    wants = [ "network-online.target" "any-sync-bundle.service" "anytype-cli.service" ];
     wantedBy = [ "multi-user.target" ];
     serviceConfig = {
       Type = "simple";
