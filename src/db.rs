@@ -677,4 +677,91 @@ mod tests {
         let got = db.get_linear_issue_for_github(303, "owner/repo").await.unwrap().unwrap();
         assert_eq!(got.linear_issue_id, "LIN-ORIG");
     }
+
+    #[tokio::test]
+    async fn session_import_roundtrip() {
+        let db = db().await;
+        let import = SessionImport {
+            session_id: "sess-001".into(),
+            session_title: "Lecture Notes".into(),
+            affine_doc_id: Some("aff-001".into()),
+            calendar_name: Some("Uni".into()),
+            event_title: Some("CS101".into()),
+            imported_at: None,
+        };
+        db.upsert_import(&import).await.unwrap();
+        let got = db.get_import("sess-001").await.unwrap().unwrap();
+        assert_eq!(got.session_id, "sess-001");
+        assert_eq!(got.session_title, "Lecture Notes");
+        assert_eq!(got.affine_doc_id.as_deref(), Some("aff-001"));
+        assert_eq!(got.calendar_name.as_deref(), Some("Uni"));
+        assert_eq!(got.event_title.as_deref(), Some("CS101"));
+        assert!(got.imported_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn session_import_upsert_preserves_existing() {
+        let db = db().await;
+        db.upsert_import(&SessionImport {
+            session_id: "sess-002".into(),
+            session_title: "Original Title".into(),
+            affine_doc_id: Some("aff-002".into()),
+            calendar_name: None,
+            event_title: Some("Physics".into()),
+            imported_at: None,
+        }).await.unwrap();
+        db.upsert_import(&SessionImport {
+            session_id: "sess-002".into(),
+            session_title: "Updated Title".into(),
+            affine_doc_id: None,
+            calendar_name: Some("Uni".into()),
+            event_title: None,
+            imported_at: None,
+        }).await.unwrap();
+        let got = db.get_import("sess-002").await.unwrap().unwrap();
+        assert_eq!(got.session_title, "Updated Title");
+        assert_eq!(got.affine_doc_id.as_deref(), Some("aff-002"));
+        assert_eq!(got.calendar_name.as_deref(), Some("Uni"));
+        assert_eq!(got.event_title.as_deref(), Some("Physics"));
+    }
+
+    #[tokio::test]
+    async fn is_imported_true_and_false() {
+        let db = db().await;
+        db.upsert_import(&SessionImport {
+            session_id: "sess-exists".into(),
+            session_title: "Exists".into(),
+            affine_doc_id: None,
+            calendar_name: None,
+            event_title: None,
+            imported_at: None,
+        }).await.unwrap();
+        assert!(db.is_imported("sess-exists").await.unwrap());
+        assert!(!db.is_imported("sess-missing").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn list_imports_returns_all() {
+        let db = db().await;
+        for i in 0..3 {
+            db.upsert_import(&SessionImport {
+                session_id: format!("sess-list-{i}"),
+                session_title: format!("Session {i}"),
+                affine_doc_id: None,
+                calendar_name: None,
+                event_title: None,
+                imported_at: None,
+            }).await.unwrap();
+        }
+        let all = db.list_imports().await.unwrap();
+        assert_eq!(all.len(), 3);
+        assert!(all.iter().all(|s| s.imported_at.is_some()));
+    }
+
+    #[tokio::test]
+    async fn insert_study_plan_roundtrip() {
+        let db = db().await;
+        db.insert_study_plan("2026-W13", Some("aff-sp-001")).await.unwrap();
+        db.insert_study_plan("2026-W14", None).await.unwrap();
+    }
 }

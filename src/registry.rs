@@ -101,3 +101,145 @@ impl ConnectorRegistry {
         self.connectors.read().await.keys().cloned().collect()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::sync::atomic::{AtomicU8, Ordering};
+    use crate::connector::{Connector, ConnectorStatus};
+
+    struct TestConnector {
+        status: AtomicU8,
+        label: &'static str,
+    }
+
+    impl TestConnector {
+        fn new(label: &'static str) -> Self {
+            Self {
+                status: AtomicU8::new(1),
+                label,
+            }
+        }
+    }
+
+    impl Connector for TestConnector {
+        fn name(&self) -> &'static str {
+            self.label
+        }
+
+        fn status(&self) -> ConnectorStatus {
+            match self.status.load(Ordering::SeqCst) {
+                0 => ConnectorStatus::Running,
+                1 => ConnectorStatus::Stopped,
+                2 => ConnectorStatus::Suspended,
+                _ => ConnectorStatus::Error("unknown".into()),
+            }
+        }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+
+        fn start(&self) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + '_>> {
+            Box::pin(async {
+                self.status.store(0, Ordering::SeqCst);
+                Ok(())
+            })
+        }
+
+        fn stop(&self) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + '_>> {
+            Box::pin(async {
+                self.status.store(1, Ordering::SeqCst);
+                Ok(())
+            })
+        }
+
+        fn health_check(&self) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + '_>> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    #[tokio::test]
+    async fn register_starts_connector() {
+        let registry = ConnectorRegistry::new();
+        let conn = Arc::new(TestConnector::new("test"));
+        registry.register("test".into(), conn.clone()).await.unwrap();
+        assert!(matches!(conn.status(), ConnectorStatus::Running));
+    }
+
+    #[tokio::test]
+    async fn deregister_stops_connector() {
+        let registry = ConnectorRegistry::new();
+        let conn = Arc::new(TestConnector::new("test"));
+        registry.register("test".into(), conn.clone()).await.unwrap();
+        let removed = registry.deregister("test").await.unwrap();
+        assert!(removed.is_some());
+        assert!(matches!(conn.status(), ConnectorStatus::Stopped));
+    }
+
+    #[tokio::test]
+    async fn toggle_stops_running_connector() {
+        let registry = ConnectorRegistry::new();
+        let conn = Arc::new(TestConnector::new("test"));
+        registry.register("test".into(), conn.clone()).await.unwrap();
+        let status = registry.toggle("test").await.unwrap();
+        assert!(matches!(status, ConnectorStatus::Stopped));
+    }
+
+    #[tokio::test]
+    async fn toggle_starts_stopped_connector() {
+        let registry = ConnectorRegistry::new();
+        let conn = Arc::new(TestConnector::new("test"));
+        registry.register("test".into(), conn.clone()).await.unwrap();
+        registry.toggle("test").await.unwrap();
+        let status = registry.toggle("test").await.unwrap();
+        assert!(matches!(status, ConnectorStatus::Running));
+    }
+
+    #[tokio::test]
+    async fn toggle_nonexistent_returns_error() {
+        let registry = ConnectorRegistry::new();
+        let result = registry.toggle("nonexistent").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn list_returns_all_connectors() {
+        let registry = ConnectorRegistry::new();
+        registry.register("alpha".into(), Arc::new(TestConnector::new("alpha"))).await.unwrap();
+        registry.register("beta".into(), Arc::new(TestConnector::new("beta"))).await.unwrap();
+        registry.register("gamma".into(), Arc::new(TestConnector::new("gamma"))).await.unwrap();
+        let list = registry.list().await;
+        assert_eq!(list.len(), 3);
+        let names: Vec<_> = list.iter().map(|(n, _)| n.as_str()).collect();
+        assert!(names.contains(&"alpha"));
+        assert!(names.contains(&"beta"));
+        assert!(names.contains(&"gamma"));
+    }
+
+    #[tokio::test]
+    async fn suspend_all_suspends_running() {
+        let registry = ConnectorRegistry::new();
+        let c1 = Arc::new(TestConnector::new("one"));
+        let c2 = Arc::new(TestConnector::new("two"));
+        registry.register("one".into(), c1.clone()).await.unwrap();
+        registry.register("two".into(), c2.clone()).await.unwrap();
+        registry.suspend_all().await;
+        assert!(matches!(c1.status(), ConnectorStatus::Stopped));
+        assert!(matches!(c2.status(), ConnectorStatus::Stopped));
+    }
+
+    #[tokio::test]
+    async fn resume_all_resumes_suspended() {
+        let registry = ConnectorRegistry::new();
+        let conn = Arc::new(TestConnector::new("test"));
+        registry.register("test".into(), conn.clone()).await.unwrap();
+        registry.suspend_all().await;
+        assert!(matches!(conn.status(), ConnectorStatus::Stopped));
+        conn.status.store(2, Ordering::SeqCst);
+        registry.resume_all().await;
+        assert!(matches!(conn.status(), ConnectorStatus::Running));
+    }
+}

@@ -131,3 +131,48 @@ impl Config {
         Ok(cfg)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn config_partial_eq_detects_change() {
+        let a = LinearConfig {
+            api_key: "key-a".into(),
+            webhook_secret: "secret".into(),
+            team_id: None,
+        };
+        let b = LinearConfig {
+            api_key: "key-b".into(),
+            webhook_secret: "secret".into(),
+            team_id: None,
+        };
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn config_partial_eq_same_values() {
+        let a = LinearConfig {
+            api_key: "key-same".into(),
+            webhook_secret: "secret-same".into(),
+            team_id: Some("team-1".into()),
+        };
+        let b = LinearConfig {
+            api_key: "key-same".into(),
+            webhook_secret: "secret-same".into(),
+            team_id: Some("team-1".into()),
+        };
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn power_config_default_values() {
+        let p = PowerConfig::default();
+        assert!((p.threshold - 5.0).abs() < f64::EPSILON);
+        assert!((p.decay_rate - 0.5).abs() < f64::EPSILON);
+        assert_eq!(p.tick_interval_secs, 30);
+        assert!((p.spike_weight - 2.0).abs() < f64::EPSILON);
+        assert_eq!(p.min_active_secs, 10);
+    }
+}
