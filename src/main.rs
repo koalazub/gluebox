@@ -9,9 +9,11 @@ mod openclaw;
 mod connector;
 mod registry;
 mod daemon;
+mod socket;
+mod gluebox_capnp;
 
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{broadcast, RwLock};
 use tracing_subscriber::EnvFilter;
 use clap::Parser;
 
@@ -79,12 +81,15 @@ async fn main() -> anyhow::Result<()> {
             let power_config = cfg.power.clone().unwrap_or_default();
             let power = Arc::new(power::PowerManager::new(power_config)?);
 
+            let (events_tx, _) = broadcast::channel::<socket::ActivityEventData>(256);
+
             let state = Arc::new(AppState {
                 registry: registry.clone(),
                 db,
                 config: Arc::new(RwLock::new(cfg)),
                 power: power.clone(),
                 started_at: std::time::Instant::now(),
+                events_tx: events_tx.clone(),
             });
 
             let tick_power = state.power.clone();
@@ -140,6 +145,14 @@ async fn main() -> anyhow::Result<()> {
                 }
             });
 
+            let socket_state = state.clone();
+            let socket_events_tx = events_tx.clone();
+            tokio::spawn(async move {
+                if let Err(e) = socket::run(socket_state, socket_events_tx).await {
+                    tracing::error!("socket server error: {e}");
+                }
+            });
+
             let app = webhook::router(state.clone());
 
             tracing::info!(%listen_addr, "gluebox starting");
@@ -151,6 +164,7 @@ async fn main() -> anyhow::Result<()> {
                     tokio::signal::ctrl_c().await.ok();
                     tracing::info!("shutdown signal received");
                     shutdown_state.registry.stop_all().await;
+                    socket::cleanup_socket(&shutdown_state).await;
                 })
                 .await?;
         }
@@ -182,4 +196,5 @@ pub struct AppState {
     pub config: Arc<RwLock<config::Config>>,
     pub power: Arc<power::PowerManager>,
     pub started_at: std::time::Instant,
+    pub events_tx: broadcast::Sender<socket::ActivityEventData>,
 }

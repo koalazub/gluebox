@@ -175,6 +175,7 @@
           buildInputs = with pkgs; [
             rustc cargo clippy rustfmt rust-analyzer pkg-config openssl sqlite
             cargo-nextest
+            capnproto
             vultr-cli
             nushell
           ];

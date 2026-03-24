@@ -28,6 +28,10 @@ urlencoding = "2"
 matrix-sdk = { version = "0.16", default-features = false, features = ["e2e-encryption", "sqlite", "rustls-tls"] }
 dirs = "6"
 tokio-util = { version = "0.7", features = ["rt"] }
+capnp = "0.20"
+
+[build-dependencies]
+capnpc = "0.20"
 
 [profile.release]
 strip = true
