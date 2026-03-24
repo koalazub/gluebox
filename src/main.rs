@@ -11,6 +11,7 @@ mod registry;
 mod daemon;
 mod socket;
 mod gluebox_capnp;
+mod tui;
 
 use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
@@ -169,7 +170,7 @@ async fn main() -> anyhow::Result<()> {
                 .await?;
         }
         Some(Commands::Tui) => {
-            eprintln!("TUI not yet implemented");
+            tui::run().await?;
         }
         Some(Commands::Status) => {
             let resp = reqwest::get("http://127.0.0.1:8990/admin/status").await?;

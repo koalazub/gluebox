@@ -1,65 +1,118 @@
 # Gluebox
 
-Gluebox is the integration backbone for Stonkwatch. It exists because we use four tools that don't talk to each other: Linear for project management, Anytype for specs and knowledge, Matrix for encrypted team chat, and Documenso for document signing. When someone files an issue in Linear, the rest of the team shouldn't have to manually copy that into a spec doc, paste a link into chat, and remember to update everything when the status changes. Gluebox handles all of that automatically.
+Runtime-configurable service daemon that syncs data across tools. Connectors for Linear, Anytype, Matrix, Documenso, and GitHub are managed through a common lifecycle interface. A LIF neuron-inspired power manager governs active/resting state. A ratatui TUI provides a live dashboard. Config hot-reloads on SIGHUP.
 
-It runs as a single Rust binary that receives webhooks from Linear and Documenso, maintains bidirectional sync with Anytype, posts notifications to an encrypted Matrix room, and hosts an AI-powered chatbot called OpenClaw that lives in that same room.
+## Architecture
 
-## The problem
+### Connector trait
 
-Stonkwatch's workflow spans multiple tools by necessity. Linear is good at issue tracking but knows nothing about our specs. Anytype is good at structured knowledge but has no concept of a project board. Matrix is where actual conversations happen but has no integration with either. Documenso handles contracts and signatures but those completions and rejections need to be visible to the rest of the system.
+Every integration implements `Connector`:
 
-Without gluebox, every state change requires someone to manually propagate information across tools. An issue gets shipped in Linear? Someone has to update the spec in Anytype and tell the team in Matrix. A contract gets rejected in Documenso? Someone has to file a comment on the related Linear issue and update the Anytype record. This falls apart quickly, and things get missed.
+```rust
+pub trait Connector: Send + Sync {
+    fn name(&self) -> &'static str;
+    fn status(&self) -> ConnectorStatus;
+    fn start(&self) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + '_>>;
+    fn stop(&self) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + '_>>;
+    fn health_check(&self) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + '_>>;
+    fn reconfigure(&self, raw_toml: &toml::Value) -> Pin<Box<dyn Future<Output = anyhow::Result<bool>> + Send + '_>>;
+    // suspend/resume default to stop/start
+}
+```
 
-## How it works
+`ConnectorStatus` is one of `Running`, `Stopped`, `Suspended`, or `Error(String)`.
 
-Gluebox is a webhook receiver and event router. When something happens in a connected service, gluebox receives the event, verifies its authenticity, and triggers the appropriate actions across other services.
+### ConnectorRegistry
 
-### Linear to Anytype sync
+`ConnectorRegistry` holds a `HashMap<String, Arc<dyn Connector>>` behind an async `RwLock`. It provides `register`, `deregister`, `toggle`, `suspend_all`, `resume_all`, `stop_all`, and `list`.
 
-When a Linear issue is created with a "spec" label, gluebox creates a corresponding Spec object in Anytype with the issue's title and description, stores the mapping in its local SQLite database, writes the Anytype object ID back into the Linear issue for cross-referencing, and notifies the Matrix room. When the issue is updated, the Anytype spec is patched to match. When it ships, the spec is marked as shipped and the team gets notified.
+### LIF power manager
 
-### Documenso to Anytype sync
+`PowerManager` models a leaky integrate-and-fire neuron. Each incoming activity event calls `spike()`, which adds `spike_weight` to the membrane potential. A background ticker calls `tick()` on each interval, decaying the potential by `decay_rate`. When potential crosses `threshold` the manager transitions to `Active` and notifies all subscribers via a `watch` channel. When potential decays back below `threshold` and `min_active_secs` have elapsed, it transitions to `Resting`. The registry suspends all connectors on `Resting` and resumes them on `Active`.
 
-When a document is completed in Documenso (all parties have signed), gluebox creates or updates a Contract object in Anytype with party details and completion date, then notifies Matrix. If a document is rejected, gluebox records the rejection reasons in Anytype, updates the mapping status, and if there's a linked Linear issue, adds a comment about the rejection.
+### Unix socket + Cap'n Proto
 
-### Webhook verification
+The daemon listens on a unix socket (default `gluebox.sock` in the working directory, overridden by `socket_path`). Messages are framed with Cap'n Proto. The TUI connects to this socket to stream live connector status and activity events.
 
-Linear webhooks are verified using HMAC-SHA256 with constant-time comparison and a 60-second replay window. Documenso webhooks use a shared secret, also compared in constant time. Invalid signatures get a 401.
+### HTTP admin API
 
-### OpenClaw
+Axum serves an HTTP admin API on `listen_addr`:
 
-OpenClaw is an AI chatbot that lives in the Stonkwatch Matrix room. It responds to `!bot` messages and can draft technical specs, write Architecture Decision Records, create Linear issues from natural language descriptions, or just have a conversation. Intent classification uses fast keyword matching first, falling back to AI classification via the OpenCode API. It operates over E2EE, with cross-signing bootstrapped on login and crypto state persisted in SQLite.
+- `GET  /admin/status` — JSON snapshot of all connector statuses and power state
+- `POST /admin/reload` — trigger config reload
+- `POST /admin/connectors/:name/toggle` — toggle a connector
 
-## Deployment
+Webhook endpoints live under `/webhooks/`.
 
-Gluebox runs on a NixOS VPS alongside a self-hosted Anytype server. The entire system is defined declaratively in a Nix flake and deployed via deploy-rs from GitHub Actions on push to main.
+## Quick start
 
-The server runs five services:
+```sh
+cp gluebox.example.toml gluebox.toml
+# fill in credentials
+gluebox          # start the daemon
+gluebox tui      # open the TUI dashboard (in another terminal)
+```
 
-- **Gluebox** itself, listening on `127.0.0.1:8990`, reading config from `/etc/gluebox/gluebox.toml`
-- **any-sync-bundle**, a self-hosted Anytype sync server that packages all server-side components into a single Go binary
-- **MongoDB**, required by any-sync-bundle for metadata storage (replica set, single node)
-- **Valkey** (Redis fork) with the Bloom filter module, required by any-sync-bundle for caching
-- **Tailscale**, providing private networking. The firewall only opens port 22 publicly; everything else is accessible only over the Tailscale network via Funnel
+Config path defaults to `gluebox.toml` in the working directory. Override with `GLUEBOX_CONFIG=/path/to/config.toml`.
 
-Gluebox's own persistence is just SQLite. MongoDB, Valkey, and the Bloom filter module are all dependencies of any-sync-bundle, not gluebox.
+## CLI reference
 
-The Anytype desktop client connects to the self-hosted server over Tailscale, so specs and contracts created by gluebox appear in Anytype's UI like any other object.
+| Command | Description |
+|---|---|
+| `gluebox` | Run the daemon |
+| `gluebox tui` | Connect to a running daemon and show the dashboard |
+| `gluebox status` | Print current connector and power state as JSON |
+| `gluebox reload` | Trigger a config reload on the running daemon |
+| `gluebox toggle <name>` | Toggle a connector by name |
 
-## Configuration
+`status`, `reload`, and `toggle` talk to the admin API at `http://127.0.0.1:8990`. If `listen_addr` is customised the commands will need to be pointed at the right address manually (or via the admin API directly).
 
-Gluebox reads its config from the path in `$GLUEBOX_CONFIG` (defaults to `gluebox.toml` in the working directory). See `gluebox.example.toml` for the full structure. The config contains API keys and webhook secrets for each integration, the Matrix bot credentials, and the SQLite database path.
+## Config reference
 
-The `opencode` section is optional. If absent, OpenClaw is disabled. The `matrix.bot_username` and `bot_password` fields are also optional. Without them, the E2EE bot and encrypted notifications are disabled.
+See `gluebox.example.toml` for full examples.
+
+| Section | Controls |
+|---|---|
+| *(root)* | `listen_addr`, `notify_secret`, `socket_path` |
+| `[turso]` | libsql/Turso database URL, auth token, optional local replica path |
+| `[power]` | LIF power manager thresholds and timing |
+| `[linear]` | Linear API key, webhook secret, team ID |
+| `[anytype]` | Anytype HTTP API URL, API key, space ID |
+| `[matrix]` | Matrix homeserver, access token, room IDs, optional bot credentials |
+| `[documenso]` | Documenso API URL, API key, webhook secret |
+| `[opencode]` | OpenCode API key (enables the OpenClaw chatbot) |
+| `[github]` | GitHub token, repo, webhook secret |
+
+All connector sections are optional. Omitting a section disables that connector entirely.
+
+## Adding a new connector
+
+1. Implement `Connector` for your type in `src/connectors/<name>.rs`.
+2. Add a config struct to `src/config.rs` and add an `Option<YourConfig>` field to `Config`.
+3. Expose the module in `src/connectors/mod.rs`.
+4. Register the connector in `main.rs` alongside the existing connector registrations.
+5. Add the corresponding TOML section to `gluebox.toml`.
+
+## Power management
+
+The power manager is modelled on a leaky integrate-and-fire (LIF) neuron:
+
+- Each activity event fires a spike that raises the membrane potential by `spike_weight`.
+- A periodic tick decays the potential by `decay_rate`, floor zero.
+- When potential reaches `threshold` the daemon enters **Active** state and all suspended connectors are resumed.
+- Once below `threshold`, the daemon stays Active for at least `min_active_secs` before returning to **Resting** and suspending connectors.
+- `tick_interval_secs` controls how often the decay tick fires.
+
+All parameters are configurable in `[power]` and hot-reloadable.
 
 ## Building
 
-```
+```sh
 cargo build --release
 ```
 
-The flake also provides a Nix package:
+Nix package:
 
-```
+```sh
 nix build .#gluebox
 ```

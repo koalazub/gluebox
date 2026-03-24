@@ -3,11 +3,29 @@ listen_addr = "127.0.0.1:8990"
 # Shared secret for /api/notify endpoint (Bearer token)
 notify_secret = "your-notify-secret-here"
 
+# Unix socket path for TUI communication.
+# Defaults to "gluebox.sock" in the working directory when omitted.
+# socket_path = "/run/gluebox/gluebox.sock"
+
 [turso]
 url = "libsql://your-db-name.turso.io"
 auth_token = "your-turso-auth-token"
 # Optional: local embedded replica for fast reads + offline resilience
 # replica_path = "/var/lib/gluebox/gluebox.db"
+
+# LIF power manager. Controls when the daemon is Active vs Resting.
+# All values are optional; the defaults shown here are used when the section is omitted.
+[power]
+# Membrane potential must reach this value to transition to Active.
+threshold = 5.0
+# Amount subtracted from potential on every tick.
+decay_rate = 0.5
+# Seconds between decay ticks.
+tick_interval_secs = 30
+# Amount added to potential on each activity spike.
+spike_weight = 2.0
+# Minimum seconds to stay Active before returning to Resting once potential drops below threshold.
+min_active_secs = 10
 
 [linear]
 api_key = "lin_api_XXXXXXXX"
@@ -41,3 +59,11 @@ api_key = "your-opencode-zen-api-key"
 token = "ghp_your-github-token"
 repo = "your-org/your-repo"
 webhook_secret = "your-github-webhook-secret"
+
+# Example of how a future connector would be added.
+# Implement the Connector trait, add an AffineConfig struct in config.rs,
+# register it in main.rs, then add the section here.
+# [affine]
+# api_url = "https://your-affine-instance.example.com/api"
+# api_key = "your-affine-api-key"
+# workspace_id = "your-workspace-id"
