@@ -24,7 +24,7 @@ pub async fn generate_plan(state: &Arc<AppState>, period: &str, course: Option<&
                     continue;
                 }
             }
-            lectures.push((matched.event_title, parsed.summary));
+            lectures.push((matched.event_title, parsed.summary.unwrap_or_default()));
         }
     }
 

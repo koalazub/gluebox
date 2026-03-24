@@ -10,10 +10,9 @@ pub struct SessionMeta {
 }
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct ParsedSession {
     pub meta: SessionMeta,
-    pub summary: String,
+    pub summary: Option<String>,
     pub dir: PathBuf,
 }
 
@@ -21,15 +20,17 @@ pub fn list_session_dirs(sessions_dir: &Path) -> Vec<PathBuf> {
     let Ok(entries) = std::fs::read_dir(sessions_dir) else {
         return Vec::new();
     };
-    entries
+    let mut dirs: Vec<_> = entries
         .filter_map(|e| e.ok())
         .map(|e| e.path())
-        .filter(|p| p.is_dir())
-        .collect()
+        .filter(|p| p.is_dir() && p.join("_meta.json").exists())
+        .collect();
+    dirs.sort();
+    dirs
 }
 
 pub fn parse_session(dir: &Path) -> anyhow::Result<ParsedSession> {
-    let meta_path = dir.join("meta.json");
+    let meta_path = dir.join("_meta.json");
     let meta_content = std::fs::read_to_string(&meta_path)
         .map_err(|e| anyhow::anyhow!("failed to read {}: {e}", meta_path.display()))?;
     let meta: SessionMeta = serde_json::from_str(&meta_content)
@@ -38,9 +39,10 @@ pub fn parse_session(dir: &Path) -> anyhow::Result<ParsedSession> {
     let summary_path = dir.join("_summary.md");
     let summary = if summary_path.exists() {
         let raw = std::fs::read_to_string(&summary_path)?;
-        strip_frontmatter(&raw)
+        let stripped = strip_frontmatter(&raw);
+        if stripped.is_empty() { None } else { Some(stripped) }
     } else {
-        String::new()
+        None
     };
 
     Ok(ParsedSession {

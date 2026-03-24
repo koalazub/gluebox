@@ -31,7 +31,8 @@ pub async fn import_session(state: &Arc<AppState>, session_id: &str) -> anyhow::
             } else {
                 parsed.meta.title.clone()
             };
-            match client.create_document(&title, &parsed.summary).await {
+            let summary = parsed.summary.as_deref().unwrap_or("");
+            match client.create_document(&title, summary).await {
                 Ok(id) => Some(id),
                 Err(e) => {
                     tracing::error!("failed to create affine doc: {e}");
