@@ -33,6 +33,16 @@ pub struct ContractMapping {
 }
 
 #[derive(Debug, Clone)]
+pub struct SessionImport {
+    pub session_id: String,
+    pub session_title: String,
+    pub affine_doc_id: Option<String>,
+    pub calendar_name: Option<String>,
+    pub event_title: Option<String>,
+    pub imported_at: Option<String>,
+}
+
+#[derive(Debug, Clone)]
 pub struct GithubLinearMapping {
     pub github_issue_number: i64,
     pub github_repo: String,
@@ -133,12 +143,29 @@ impl Db {
                 PRIMARY KEY (github_issue_number, github_repo)
             );
 
+            CREATE TABLE IF NOT EXISTS session_imports (
+                session_id TEXT PRIMARY KEY,
+                session_title TEXT NOT NULL,
+                affine_doc_id TEXT,
+                calendar_name TEXT,
+                event_title TEXT,
+                imported_at TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS study_plans (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                period TEXT NOT NULL,
+                affine_doc_id TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
             CREATE INDEX IF NOT EXISTS idx_spec_anytype ON spec_mappings(anytype_object_id);
             CREATE INDEX IF NOT EXISTS idx_contract_anytype ON contract_mappings(anytype_object_id);
             CREATE INDEX IF NOT EXISTS idx_contract_linear ON contract_mappings(linear_issue_id);
             CREATE INDEX IF NOT EXISTS idx_event_log_ext ON event_log(source, external_id);
             CREATE INDEX IF NOT EXISTS idx_feedback_category ON feedback_tickets(category);
-            CREATE INDEX IF NOT EXISTS idx_gh_linear_mapping ON github_linear_mappings(linear_issue_id);"
+            CREATE INDEX IF NOT EXISTS idx_gh_linear_mapping ON github_linear_mappings(linear_issue_id);
+            CREATE INDEX IF NOT EXISTS idx_imports_calendar ON session_imports(calendar_name);"
         ).await?;
         Ok(())
     }
@@ -377,6 +404,85 @@ impl Db {
         let instance = Db { db, persistent_conn: Some(conn) };
         instance.migrate().await?;
         Ok(instance)
+    }
+
+    pub async fn upsert_import(&self, import: &SessionImport) -> anyhow::Result<()> {
+        self.conn()?.execute(
+            "INSERT INTO session_imports (session_id, session_title, affine_doc_id, calendar_name, event_title, imported_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, datetime('now'))
+             ON CONFLICT(session_id) DO UPDATE SET
+                session_title = COALESCE(excluded.session_title, session_title),
+                affine_doc_id = COALESCE(excluded.affine_doc_id, affine_doc_id),
+                calendar_name = COALESCE(excluded.calendar_name, calendar_name),
+                event_title = COALESCE(excluded.event_title, event_title),
+                imported_at = datetime('now')",
+            params![
+                import.session_id.clone(),
+                import.session_title.clone(),
+                import.affine_doc_id.clone(),
+                import.calendar_name.clone(),
+                import.event_title.clone(),
+            ],
+        ).await?;
+        Ok(())
+    }
+
+    pub async fn get_import(&self, session_id: &str) -> anyhow::Result<Option<SessionImport>> {
+        let mut rows = self.conn()?.query(
+            "SELECT session_id, session_title, affine_doc_id, calendar_name, event_title, imported_at
+             FROM session_imports WHERE session_id = ?1",
+            params![session_id.to_string()],
+        ).await?;
+        match rows.next().await? {
+            Some(row) => Ok(Some(SessionImport {
+                session_id: row.get(0)?,
+                session_title: row.get(1)?,
+                affine_doc_id: row.get(2)?,
+                calendar_name: row.get(3)?,
+                event_title: row.get(4)?,
+                imported_at: row.get(5)?,
+            })),
+            None => Ok(None),
+        }
+    }
+
+    pub async fn is_imported(&self, session_id: &str) -> anyhow::Result<bool> {
+        let mut rows = self.conn()?.query(
+            "SELECT 1 FROM session_imports WHERE session_id = ?1",
+            params![session_id.to_string()],
+        ).await?;
+        Ok(rows.next().await?.is_some())
+    }
+
+    pub async fn list_imports(&self) -> anyhow::Result<Vec<SessionImport>> {
+        let mut rows = self.conn()?.query(
+            "SELECT session_id, session_title, affine_doc_id, calendar_name, event_title, imported_at
+             FROM session_imports ORDER BY imported_at DESC",
+            params![],
+        ).await?;
+        let mut results = Vec::new();
+        while let Some(row) = rows.next().await? {
+            results.push(SessionImport {
+                session_id: row.get(0)?,
+                session_title: row.get(1)?,
+                affine_doc_id: row.get(2)?,
+                calendar_name: row.get(3)?,
+                event_title: row.get(4)?,
+                imported_at: row.get(5)?,
+            });
+        }
+        Ok(results)
+    }
+
+    pub async fn insert_study_plan(&self, period: &str, affine_doc_id: Option<&str>) -> anyhow::Result<()> {
+        self.conn()?.execute(
+            "INSERT INTO study_plans (period, affine_doc_id) VALUES (?1, ?2)",
+            params![
+                period.to_string(),
+                affine_doc_id.map(|s| s.to_string()),
+            ],
+        ).await?;
+        Ok(())
     }
 
     pub async fn get_github_issue_for_linear(

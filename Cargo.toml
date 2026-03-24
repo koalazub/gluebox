@@ -28,6 +28,7 @@ matrix-sdk = { version = "0.16", default-features = false, features = ["e2e-encr
 dirs = "6"
 tokio-util = { version = "0.7", features = ["rt"] }
 capnp = "0.20"
+notify = "7"
 ratatui = "0.29"
 crossterm = "0.28"
 

@@ -4,3 +4,7 @@ pub mod matrix;
 pub mod documenso;
 pub mod opencode;
 pub mod github;
+pub mod affine;
+pub mod char_sessions;
+pub mod calendar;
+pub mod session_watcher;

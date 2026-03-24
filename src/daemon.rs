@@ -153,6 +153,60 @@ pub async fn reload(state: &Arc<AppState>) -> anyhow::Result<String> {
         _ => {}
     }
 
+    match (&old_cfg.affine, &new_cfg.affine) {
+        (None, Some(new)) => {
+            let connector = Arc::new(connectors::affine::AffineConnector::new(new.clone()));
+            state.registry.register("affine".into(), connector).await?;
+            changes.push("affine: added".into());
+        }
+        (Some(_), None) => {
+            state.registry.deregister("affine").await?;
+            changes.push("affine: removed".into());
+        }
+        (Some(old), Some(new)) if old != new => {
+            if let Some(conn) = state.registry.get_dyn("affine").await {
+                let toml_val = toml::Value::try_from(new.clone())?;
+                let reconfigured = conn.reconfigure(&toml_val).await?;
+                if !reconfigured {
+                    state.registry.deregister("affine").await?;
+                    let connector = Arc::new(connectors::affine::AffineConnector::new(new.clone()));
+                    state.registry.register("affine".into(), connector).await?;
+                }
+            }
+            changes.push("affine: reconfigured".into());
+        }
+        _ => {}
+    }
+
+    match (&old_cfg.watcher, &new_cfg.watcher) {
+        (None, Some(new)) => {
+            let connector = Arc::new(connectors::session_watcher::SessionWatcherConnector::new(
+                new.clone(),
+                Box::new(|session_id| {
+                    tracing::info!(session_id, "watcher detected session ready for import");
+                }),
+            ));
+            state.registry.register("watcher".into(), connector).await?;
+            changes.push("watcher: added".into());
+        }
+        (Some(_), None) => {
+            state.registry.deregister("watcher").await?;
+            changes.push("watcher: removed".into());
+        }
+        (Some(old), Some(new)) if old != new => {
+            state.registry.deregister("watcher").await?;
+            let connector = Arc::new(connectors::session_watcher::SessionWatcherConnector::new(
+                new.clone(),
+                Box::new(|session_id| {
+                    tracing::info!(session_id, "watcher detected session ready for import");
+                }),
+            ));
+            state.registry.register("watcher".into(), connector).await?;
+            changes.push("watcher: reconfigured".into());
+        }
+        _ => {}
+    }
+
     if old_cfg.power != new_cfg.power {
         let new_power = new_cfg.power.clone().unwrap_or_default();
         state.power.reconfigure(new_power)?;

@@ -30,6 +30,11 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/admin/reload", post(admin_reload))
         .route("/admin/spike", post(admin_spike))
         .route("/admin/power", get(admin_power))
+        .route("/api/sessions", get(list_sessions))
+        .route("/api/import", post(import_latest))
+        .route("/api/import/all", post(import_all))
+        .route("/api/import/{session_id}", post(import_by_id))
+        .route("/api/study-plan", post(create_study_plan))
         .with_state(state)
 }
 
@@ -600,4 +605,94 @@ async fn admin_power(
         potential: state.power.potential(),
         threshold: state.power.threshold(),
     }))
+}
+
+async fn list_sessions(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    check_admin_auth(&state, &headers).await?;
+    match state.db.list_imports().await {
+        Ok(imports) => {
+            let items: Vec<serde_json::Value> = imports.iter().map(|i| {
+                serde_json::json!({
+                    "session_id": i.session_id,
+                    "session_title": i.session_title,
+                    "affine_doc_id": i.affine_doc_id,
+                    "calendar_name": i.calendar_name,
+                    "event_title": i.event_title,
+                    "imported_at": i.imported_at,
+                })
+            }).collect();
+            Ok(Json(serde_json::json!({"sessions": items})))
+        }
+        Err(e) => {
+            tracing::error!("list_sessions failed: {e}");
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+async fn import_latest(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    check_admin_auth(&state, &headers).await?;
+    match triggers::session_import::import_latest_uni(&state).await {
+        Ok(msg) => Ok(Json(serde_json::json!({"result": msg}))),
+        Err(e) => {
+            tracing::error!("import_latest failed: {e}");
+            Ok(Json(serde_json::json!({"error": e.to_string()})))
+        }
+    }
+}
+
+async fn import_all(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    check_admin_auth(&state, &headers).await?;
+    match triggers::session_import::import_all_uni(&state).await {
+        Ok(msg) => Ok(Json(serde_json::json!({"result": msg}))),
+        Err(e) => {
+            tracing::error!("import_all failed: {e}");
+            Ok(Json(serde_json::json!({"error": e.to_string()})))
+        }
+    }
+}
+
+async fn import_by_id(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(session_id): Path<String>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    check_admin_auth(&state, &headers).await?;
+    match triggers::session_import::import_session(&state, &session_id).await {
+        Ok(msg) => Ok(Json(serde_json::json!({"result": msg}))),
+        Err(e) => {
+            tracing::error!("import_by_id failed: {e}");
+            Ok(Json(serde_json::json!({"error": e.to_string()})))
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct StudyPlanRequest {
+    period: String,
+    course: Option<String>,
+}
+
+async fn create_study_plan(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(req): Json<StudyPlanRequest>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    check_admin_auth(&state, &headers).await?;
+    match triggers::study_plan::generate_plan(&state, &req.period, req.course.as_deref()).await {
+        Ok(msg) => Ok(Json(serde_json::json!({"result": msg}))),
+        Err(e) => {
+            tracing::error!("create_study_plan failed: {e}");
+            Ok(Json(serde_json::json!({"error": e.to_string()})))
+        }
+    }
 }

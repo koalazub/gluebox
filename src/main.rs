@@ -79,6 +79,21 @@ async fn main() -> anyhow::Result<()> {
                 registry.register("opencode".into(), connector).await?;
             }
 
+            if let Some(ref affine_cfg) = cfg.affine {
+                let connector = Arc::new(connectors::affine::AffineConnector::new(affine_cfg.clone()));
+                registry.register("affine".into(), connector).await?;
+            }
+
+            if let Some(ref watcher_cfg) = cfg.watcher {
+                let connector = Arc::new(connectors::session_watcher::SessionWatcherConnector::new(
+                    watcher_cfg.clone(),
+                    Box::new(|session_id| {
+                        tracing::info!(session_id, "watcher detected session ready for import");
+                    }),
+                ));
+                registry.register("watcher".into(), connector).await?;
+            }
+
             let power_config = cfg.power.clone().unwrap_or_default();
             let power = Arc::new(power::PowerManager::new(power_config)?);
 
