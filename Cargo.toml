@@ -22,7 +22,7 @@ thiserror = "2"
 url = "2"
 toml = "0.8"
 anyhow = "1"
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
 urlencoding = "2"
 matrix-sdk = { version = "0.16", default-features = false, features = ["e2e-encryption", "sqlite", "rustls-tls"] }
 dirs = "6"
@@ -31,6 +31,7 @@ capnp = "0.20"
 notify = "7"
 ratatui = "0.29"
 crossterm = "0.28"
+rmcp = { version = "1.1", features = ["server", "transport-io"] }
 
 [build-dependencies]
 capnpc = "0.20"

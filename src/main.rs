@@ -12,6 +12,7 @@ mod daemon;
 mod socket;
 mod gluebox_capnp;
 mod tui;
+mod mcp;
 
 use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
@@ -31,6 +32,12 @@ enum Commands {
     Status,
     Reload,
     Toggle { connector: String },
+    Mcp {
+        #[arg(long, default_value = "http://127.0.0.1:8990")]
+        daemon_url: String,
+        #[arg(long, env = "GLUEBOX_NOTIFY_SECRET", default_value = "")]
+        auth_token: String,
+    },
 }
 
 #[tokio::main]
@@ -200,6 +207,9 @@ async fn main() -> anyhow::Result<()> {
             let client = reqwest::Client::new();
             let resp = client.post(format!("http://127.0.0.1:8990/admin/connectors/{connector}/toggle")).send().await?;
             println!("{}", resp.text().await?);
+        }
+        Some(Commands::Mcp { daemon_url, auth_token }) => {
+            mcp::run(daemon_url, auth_token).await?;
         }
     }
 
