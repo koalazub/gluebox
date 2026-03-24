@@ -1,8 +1,8 @@
-use libsql::{Builder, Connection, params};
-use std::path::Path;
+use libsql::{Builder, Connection, Database, params};
 
 pub struct Db {
-    conn: Connection,
+    db: Database,
+    persistent_conn: Option<Connection>,
 }
 
 #[derive(Debug, Clone)]
@@ -41,23 +41,50 @@ pub struct GithubLinearMapping {
 }
 
 impl Db {
-    pub async fn open(path: &Path, turso: Option<&crate::config::TursoConfig>) -> anyhow::Result<Self> {
-        let db = match turso {
-            Some(cfg) => Builder::new_remote(cfg.url.clone(), cfg.auth_token.clone())
-                .build()
-                .await?,
-            None => Builder::new_local(path)
+    pub async fn open(turso: &crate::config::TursoConfig) -> anyhow::Result<Self> {
+        let db = match &turso.replica_path {
+            Some(path) => {
+                if let Some(parent) = path.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                let mut builder = Builder::new_remote_replica(
+                    path,
+                    turso.url.clone(),
+                    turso.auth_token.clone(),
+                );
+                builder = builder.read_your_writes(true);
+                if let Some(secs) = turso.sync_interval_secs {
+                    builder = builder.sync_interval(std::time::Duration::from_secs(secs));
+                }
+                if let Some(ref key) = turso.encryption_key {
+                    builder = builder.encryption_config(libsql::EncryptionConfig::new(
+                        libsql::Cipher::Aes256Cbc,
+                        bytes::Bytes::copy_from_slice(key.as_bytes()),
+                    ));
+                }
+                builder.build().await?
+            }
+            None => Builder::new_remote(turso.url.clone(), turso.auth_token.clone())
                 .build()
                 .await?,
         };
-        let conn = db.connect()?;
-        let instance = Db { conn };
+        let instance = Db { db, persistent_conn: None };
         instance.migrate().await?;
+        if turso.replica_path.is_some() {
+            instance.db.sync().await?;
+        }
         Ok(instance)
     }
 
+    fn conn(&self) -> anyhow::Result<Connection> {
+        if let Some(ref c) = self.persistent_conn {
+            return Ok(c.clone());
+        }
+        Ok(self.db.connect()?)
+    }
+
     async fn migrate(&self) -> anyhow::Result<()> {
-        self.conn.execute_batch(
+        self.conn()?.execute_batch(
             "CREATE TABLE IF NOT EXISTS spec_mappings (
                 linear_issue_id TEXT PRIMARY KEY,
                 anytype_object_id TEXT,
@@ -113,7 +140,7 @@ impl Db {
     }
 
     pub async fn upsert_spec(&self, mapping: &SpecMapping) -> anyhow::Result<()> {
-        self.conn.execute(
+        self.conn()?.execute(
             "INSERT INTO spec_mappings (linear_issue_id, anytype_object_id, linear_url, anytype_url, last_synced_at)
              VALUES (?1, ?2, ?3, ?4, datetime('now'))
              ON CONFLICT(linear_issue_id) DO UPDATE SET
@@ -132,7 +159,7 @@ impl Db {
     }
 
     pub async fn get_spec_by_linear_id(&self, linear_issue_id: &str) -> anyhow::Result<Option<SpecMapping>> {
-        let mut rows = self.conn.query(
+        let mut rows = self.conn()?.query(
             "SELECT linear_issue_id, anytype_object_id, linear_url, anytype_url, last_synced_at
              FROM spec_mappings WHERE linear_issue_id = ?1",
             params![linear_issue_id.to_string()],
@@ -150,7 +177,7 @@ impl Db {
     }
 
     pub async fn get_spec_by_anytype_id(&self, anytype_object_id: &str) -> anyhow::Result<Option<SpecMapping>> {
-        let mut rows = self.conn.query(
+        let mut rows = self.conn()?.query(
             "SELECT linear_issue_id, anytype_object_id, linear_url, anytype_url, last_synced_at
              FROM spec_mappings WHERE anytype_object_id = ?1",
             params![anytype_object_id.to_string()],
@@ -168,7 +195,7 @@ impl Db {
     }
 
     pub async fn upsert_contract(&self, mapping: &ContractMapping) -> anyhow::Result<()> {
-        self.conn.execute(
+        self.conn()?.execute(
             "INSERT INTO contract_mappings (documenso_document_id, anytype_object_id, linear_issue_id, status, last_synced_at)
              VALUES (?1, ?2, ?3, ?4, datetime('now'))
              ON CONFLICT(documenso_document_id) DO UPDATE SET
@@ -187,7 +214,7 @@ impl Db {
     }
 
     pub async fn get_contract_by_documenso_id(&self, doc_id: &str) -> anyhow::Result<Option<ContractMapping>> {
-        let mut rows = self.conn.query(
+        let mut rows = self.conn()?.query(
             "SELECT documenso_document_id, anytype_object_id, linear_issue_id, status, last_synced_at
              FROM contract_mappings WHERE documenso_document_id = ?1",
             params![doc_id.to_string()],
@@ -205,7 +232,7 @@ impl Db {
     }
 
     pub async fn log_event(&self, source: &str, event_type: &str, external_id: &str, payload: Option<&str>) -> anyhow::Result<()> {
-        self.conn.execute(
+        self.conn()?.execute(
             "INSERT INTO event_log (source, event_type, external_id, payload) VALUES (?1, ?2, ?3, ?4)",
             params![
                 source.to_string(),
@@ -225,7 +252,7 @@ impl Db {
         category: &str,
         description: &str,
     ) -> anyhow::Result<()> {
-        self.conn.execute(
+        self.conn()?.execute(
             "INSERT OR IGNORE INTO feedback_tickets
              (linear_issue_id, linear_issue_url, title, category, description)
              VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -241,7 +268,7 @@ impl Db {
     }
 
     pub async fn get_feedback_by_category(&self, category: &str, limit: usize) -> anyhow::Result<Vec<FeedbackTicket>> {
-        let mut rows = self.conn.query(
+        let mut rows = self.conn()?.query(
             "SELECT linear_issue_id, linear_issue_url, title, category, description
              FROM feedback_tickets
              WHERE category = ?1
@@ -263,7 +290,7 @@ impl Db {
     }
 
     pub async fn specs_missing_anytype_link(&self) -> anyhow::Result<Vec<SpecMapping>> {
-        let mut rows = self.conn.query(
+        let mut rows = self.conn()?.query(
             "SELECT linear_issue_id, anytype_object_id, linear_url, anytype_url, last_synced_at
              FROM spec_mappings WHERE anytype_object_id IS NULL",
             params![],
@@ -282,7 +309,7 @@ impl Db {
     }
 
     pub async fn specs_missing_linear_id(&self) -> anyhow::Result<Vec<SpecMapping>> {
-        let mut rows = self.conn.query(
+        let mut rows = self.conn()?.query(
             "SELECT linear_issue_id, anytype_object_id, linear_url, anytype_url, last_synced_at
              FROM spec_mappings WHERE linear_issue_id IS NULL OR linear_issue_id = ''",
             params![],
@@ -307,7 +334,7 @@ impl Db {
         linear_issue_id: &str,
         linear_issue_url: Option<&str>,
     ) -> anyhow::Result<()> {
-        self.conn.execute(
+        self.conn()?.execute(
             "INSERT OR IGNORE INTO github_linear_mappings
              (github_issue_number, github_repo, linear_issue_id, linear_issue_url)
              VALUES (?1, ?2, ?3, ?4)",
@@ -322,7 +349,7 @@ impl Db {
     }
 
     pub async fn get_linear_issue_for_github(&self, github_issue_number: i64, github_repo: &str) -> anyhow::Result<Option<GithubLinearMapping>> {
-        let mut rows = self.conn.query(
+        let mut rows = self.conn()?.query(
             "SELECT github_issue_number, github_repo, linear_issue_id, linear_issue_url
              FROM github_linear_mappings
              WHERE github_issue_number = ?1 AND github_repo = ?2",
@@ -343,7 +370,7 @@ impl Db {
     pub async fn new_in_memory() -> anyhow::Result<Self> {
         let db = Builder::new_local(":memory:").build().await?;
         let conn = db.connect()?;
-        let instance = Db { conn };
+        let instance = Db { db, persistent_conn: Some(conn) };
         instance.migrate().await?;
         Ok(instance)
     }
@@ -352,7 +379,7 @@ impl Db {
         &self,
         linear_issue_id: &str,
     ) -> anyhow::Result<Option<GithubLinearMapping>> {
-        let mut rows = self.conn.query(
+        let mut rows = self.conn()?.query(
             "SELECT github_issue_number, github_repo, linear_issue_id, linear_issue_url
              FROM github_linear_mappings
              WHERE linear_issue_id = ?1",

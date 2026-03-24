@@ -4,14 +4,13 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
     pub listen_addr: String,
-    pub db_path: PathBuf,
     pub notify_secret: Option<String>,
     pub linear: LinearConfig,
     pub anytype: Option<AnytypeConfig>,
     pub matrix: MatrixConfig,
     pub documenso: DocumensoConfig,
     pub opencode: Option<OpenCodeConfig>,
-    pub turso: Option<TursoConfig>,
+    pub turso: TursoConfig,
     pub github: Option<GithubConfig>,
 }
 
@@ -19,6 +18,9 @@ pub struct Config {
 pub struct TursoConfig {
     pub url: String,
     pub auth_token: String,
+    pub replica_path: Option<PathBuf>,
+    pub sync_interval_secs: Option<u64>,
+    pub encryption_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

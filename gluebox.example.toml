@@ -1,11 +1,13 @@
 listen_addr = "127.0.0.1:8990"
 
-# For production (NixOS VPS): use /var/lib/gluebox/gluebox.db
-# For local dev: use a local path like ./gluebox.db
-db_path = "/var/lib/gluebox/gluebox.db"
-
 # Shared secret for /api/notify endpoint (Bearer token)
 notify_secret = "your-notify-secret-here"
+
+[turso]
+url = "libsql://your-db-name.turso.io"
+auth_token = "your-turso-auth-token"
+# Optional: local embedded replica for fast reads + offline resilience
+# replica_path = "/var/lib/gluebox/gluebox.db"
 
 [linear]
 api_key = "lin_api_XXXXXXXX"
@@ -33,11 +35,6 @@ webhook_secret = "your-documenso-webhook-secret"
 
 [opencode]
 api_key = "your-opencode-zen-api-key"
-
-# Optional: Turso cloud database. If omitted, falls back to local libSQL at db_path.
-[turso]
-url = "libsql://your-db-name.turso.io"
-auth_token = "your-turso-auth-token"
 
 # Optional: GitHub integration for bidirectional issue sync with Linear.
 [github]
