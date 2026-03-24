@@ -1,10 +1,9 @@
 use std::sync::Arc;
 use serde_json::{json, Value};
 use crate::AppState;
-use crate::connectors::anytype::AnytypeClient;
-use crate::connectors::linear::LinearClient;
 use crate::db::SpecMapping;
 use super::to_matrix;
+use super::{linear_from_registry, anytype_from_registry};
 
 fn has_label(payload: &Value, label_name: &str) -> bool {
     payload["data"]["labels"]
@@ -34,14 +33,9 @@ pub async fn linear_issue_created(state: &Arc<AppState>, payload: &Value) -> any
     let description = payload["data"]["description"].as_str().unwrap_or_default();
     let url = payload["url"].as_str().unwrap_or_default();
 
-    let Some(ref at_cfg) = state.cfg.anytype else {
-        tracing::debug!(issue_id, "anytype not configured, skipping spec sync");
-        return Ok(());
-    };
-
     tracing::info!(issue_id, title, "trigger 1: spec-labeled issue created, upserting anytype Spec");
 
-    let anytype = AnytypeClient::new(&at_cfg.api_url, &at_cfg.api_key, &at_cfg.space_id);
+    let anytype = anytype_from_registry(state).await?;
 
     let body_md = format!("**Linear Issue:** [{title}]({url})\n\n{description}");
     let obj = match anytype.create_object("spec", title, description, Some(&body_md)).await {
@@ -60,7 +54,7 @@ pub async fn linear_issue_created(state: &Arc<AppState>, payload: &Value) -> any
         last_synced_at: None,
     }).await?;
 
-    let linear = LinearClient::new(&state.cfg.linear.api_key);
+    let linear = linear_from_registry(state).await?;
     let link_text = format!(
         "{description}\n\n---\n**Anytype Spec:** `{}`",
         obj.id,
@@ -78,7 +72,7 @@ pub async fn linear_issue_updated(state: &Arc<AppState>, payload: &Value) -> any
     let _priority = payload["data"]["priority"].as_f64();
     let current_state = state_name(payload);
 
-    if let Some(ref at_cfg) = state.cfg.anytype {
+    if let Ok(anytype) = anytype_from_registry(state).await {
         let Some(mapping) = state.db.get_spec_by_linear_id(issue_id).await? else {
             tracing::debug!(issue_id, "no spec mapping for this issue, skipping anytype sync");
             return Ok(());
@@ -92,8 +86,6 @@ pub async fn linear_issue_updated(state: &Arc<AppState>, payload: &Value) -> any
             if let Some(d) = description {
                 updates["description"] = json!(d);
             }
-
-            let anytype = AnytypeClient::new(&at_cfg.api_url, &at_cfg.api_key, &at_cfg.space_id);
 
             if updates.as_object().map(|o| !o.is_empty()).unwrap_or(false) {
                 tracing::info!(issue_id, anytype_id, "trigger 2: patching anytype spec");

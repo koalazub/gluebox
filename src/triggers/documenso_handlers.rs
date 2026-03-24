@@ -1,10 +1,10 @@
 use std::sync::Arc;
 use serde_json::json;
 use crate::AppState;
-use crate::connectors::anytype::AnytypeClient;
 use crate::connectors::documenso::WebhookPayload;
 use crate::db::ContractMapping;
 use super::to_matrix;
+use super::{linear_from_registry, anytype_from_registry};
 
 pub async fn documenso_completed(state: &Arc<AppState>, payload: &WebhookPayload) -> anyhow::Result<()> {
     let doc = &payload.payload;
@@ -23,8 +23,7 @@ pub async fn documenso_completed(state: &Arc<AppState>, payload: &WebhookPayload
 
     let existing = state.db.get_contract_by_documenso_id(&doc_id).await?;
 
-    let anytype_id = if let Some(ref at_cfg) = state.cfg.anytype {
-        let anytype = AnytypeClient::new(&at_cfg.api_url, &at_cfg.api_key, &at_cfg.space_id);
+    let anytype_id = if let Ok(anytype) = anytype_from_registry(state).await {
         if let Some(ref m) = existing {
             if let Some(ref aid) = m.anytype_object_id {
                 anytype.update_object(aid, json!({
@@ -79,10 +78,9 @@ pub async fn documenso_rejected(state: &Arc<AppState>, payload: &WebhookPayload)
 
     let existing = state.db.get_contract_by_documenso_id(&doc_id).await?;
 
-    if let Some(ref at_cfg) = state.cfg.anytype {
+    if let Ok(anytype) = anytype_from_registry(state).await {
         if let Some(ref m) = existing {
             if let Some(ref aid) = m.anytype_object_id {
-                let anytype = AnytypeClient::new(&at_cfg.api_url, &at_cfg.api_key, &at_cfg.space_id);
                 anytype.update_object(aid, json!({
                     "description": description,
                 })).await?;
@@ -104,7 +102,7 @@ pub async fn documenso_rejected(state: &Arc<AppState>, payload: &WebhookPayload)
 
     if let Some(ref m) = existing {
         if let Some(ref linear_id) = m.linear_issue_id {
-            let linear = crate::connectors::linear::LinearClient::new(&state.cfg.linear.api_key);
+            let linear = linear_from_registry(state).await?;
             linear.add_comment(
                 linear_id,
                 &format!("Contract rejected: {}\n{}", doc.title, description),

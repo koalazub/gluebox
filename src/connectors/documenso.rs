@@ -1,4 +1,9 @@
 use serde::{Deserialize, Serialize};
+use std::any::Any;
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::pin::Pin;
+use std::future::Future;
+use crate::connector::{Connector, ConnectorStatus};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WebhookPayload {
@@ -32,4 +37,55 @@ pub struct Recipient {
     pub signing_status: String,
     #[serde(rename = "rejectionReason")]
     pub rejection_reason: Option<String>,
+}
+
+pub struct DocumensoConnector {
+    status: AtomicU8,
+}
+
+impl DocumensoConnector {
+    pub fn new() -> Self {
+        Self {
+            status: AtomicU8::new(ConnectorStatus::Stopped.as_u8()),
+        }
+    }
+}
+
+impl Connector for DocumensoConnector {
+    fn name(&self) -> &'static str {
+        "documenso"
+    }
+
+    fn status(&self) -> ConnectorStatus {
+        match self.status.load(Ordering::SeqCst) {
+            0 => ConnectorStatus::Running,
+            1 => ConnectorStatus::Stopped,
+            2 => ConnectorStatus::Suspended,
+            _ => ConnectorStatus::Error(String::new()),
+        }
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn start(&self) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + '_>> {
+        Box::pin(async move {
+            self.status.store(ConnectorStatus::Running.as_u8(), Ordering::SeqCst);
+            Ok(())
+        })
+    }
+
+    fn stop(&self) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + '_>> {
+        Box::pin(async move {
+            self.status.store(ConnectorStatus::Stopped.as_u8(), Ordering::SeqCst);
+            Ok(())
+        })
+    }
+
+    fn health_check(&self) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + '_>> {
+        Box::pin(async move {
+            Ok(())
+        })
+    }
 }

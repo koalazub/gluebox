@@ -2,6 +2,7 @@ use reqwest::Client;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+#[derive(Clone)]
 pub struct LinearClient {
     client: Client,
     api_key: String,
@@ -287,5 +288,103 @@ impl LinearClient {
         let vars = json!({ "input": input });
         let resp = self.graphql(query, Some(vars)).await?;
         Ok(resp)
+    }
+}
+
+use std::any::Any;
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::pin::Pin;
+use std::future::Future;
+use tokio::sync::Mutex;
+use crate::connector::{Connector, ConnectorStatus};
+
+pub struct LinearConnector {
+    config: Mutex<crate::config::LinearConfig>,
+    client: Mutex<Option<LinearClient>>,
+    status: AtomicU8,
+    error_msg: Mutex<Option<String>>,
+}
+
+impl LinearConnector {
+    pub fn new(config: crate::config::LinearConfig) -> Self {
+        Self {
+            config: Mutex::new(config),
+            client: Mutex::new(None),
+            status: AtomicU8::new(ConnectorStatus::Stopped.as_u8()),
+            error_msg: Mutex::new(None),
+        }
+    }
+
+    pub async fn client(&self) -> anyhow::Result<LinearClient> {
+        self.client
+            .lock()
+            .await
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("linear connector not running"))
+    }
+}
+
+impl Connector for LinearConnector {
+    fn name(&self) -> &'static str {
+        "linear"
+    }
+
+    fn status(&self) -> ConnectorStatus {
+        match self.status.load(Ordering::SeqCst) {
+            0 => ConnectorStatus::Running,
+            1 => ConnectorStatus::Stopped,
+            2 => ConnectorStatus::Suspended,
+            _ => {
+                let msg = self.error_msg.blocking_lock()
+                    .clone()
+                    .unwrap_or_default();
+                ConnectorStatus::Error(msg)
+            }
+        }
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn start(&self) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + '_>> {
+        Box::pin(async move {
+            let config = self.config.lock().await;
+            let new_client = LinearClient::new(&config.api_key);
+            drop(config);
+            *self.client.lock().await = Some(new_client);
+            self.status.store(ConnectorStatus::Running.as_u8(), Ordering::SeqCst);
+            Ok(())
+        })
+    }
+
+    fn stop(&self) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + '_>> {
+        Box::pin(async move {
+            *self.client.lock().await = None;
+            self.status.store(ConnectorStatus::Stopped.as_u8(), Ordering::SeqCst);
+            Ok(())
+        })
+    }
+
+    fn health_check(&self) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + '_>> {
+        Box::pin(async move {
+            if self.client.lock().await.is_some() {
+                Ok(())
+            } else {
+                anyhow::bail!("linear connector not running")
+            }
+        })
+    }
+
+    fn reconfigure(
+        &self,
+        raw_toml: &toml::Value,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<bool>> + Send + '_>> {
+        let result = raw_toml.clone().try_into::<crate::config::LinearConfig>();
+        Box::pin(async move {
+            let new_config = result.map_err(|e| anyhow::anyhow!("invalid linear config: {e}"))?;
+            *self.config.lock().await = new_config;
+            Ok(true)
+        })
     }
 }

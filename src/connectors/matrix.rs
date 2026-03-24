@@ -200,3 +200,164 @@ fn markdown_to_html(md: &str) -> String {
       .replace("__", "<em>")
       .replace("`", "<code>")
 }
+
+use std::any::Any;
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::Arc;
+use std::pin::Pin;
+use std::future::Future;
+use tokio::sync::Mutex;
+use crate::connector::{Connector, ConnectorStatus};
+
+pub struct MatrixConnector {
+    config: Mutex<crate::config::MatrixConfig>,
+    bot: Mutex<Option<Arc<MatrixBot>>>,
+    cancel_token: Mutex<Option<tokio_util::sync::CancellationToken>>,
+    status: AtomicU8,
+    error_msg: Mutex<Option<String>>,
+}
+
+impl MatrixConnector {
+    pub fn new(config: crate::config::MatrixConfig) -> Self {
+        Self {
+            config: Mutex::new(config),
+            bot: Mutex::new(None),
+            cancel_token: Mutex::new(None),
+            status: AtomicU8::new(ConnectorStatus::Stopped.as_u8()),
+            error_msg: Mutex::new(None),
+        }
+    }
+
+    pub async fn bot(&self) -> anyhow::Result<Arc<MatrixBot>> {
+        self.bot
+            .lock()
+            .await
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("matrix connector not running"))
+    }
+
+    async fn spawn_sync_task(&self, bot: &Arc<MatrixBot>) {
+        let token = tokio_util::sync::CancellationToken::new();
+        let bot_clone = bot.clone();
+        let child = token.child_token();
+        tokio::spawn(async move {
+            tokio::select! {
+                _ = bot_clone.sync_forever(SyncSettings::default()) => {}
+                _ = child.cancelled() => {}
+            }
+        });
+        *self.cancel_token.lock().await = Some(token);
+    }
+}
+
+impl Connector for MatrixConnector {
+    fn name(&self) -> &'static str {
+        "matrix"
+    }
+
+    fn status(&self) -> ConnectorStatus {
+        match self.status.load(Ordering::SeqCst) {
+            0 => ConnectorStatus::Running,
+            1 => ConnectorStatus::Stopped,
+            2 => ConnectorStatus::Suspended,
+            _ => {
+                let msg = self.error_msg.blocking_lock()
+                    .clone()
+                    .unwrap_or_default();
+                ConnectorStatus::Error(msg)
+            }
+        }
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn start(&self) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + '_>> {
+        Box::pin(async move {
+            let config = self.config.lock().await;
+            let (username, password) = match (&config.bot_username, &config.bot_password) {
+                (Some(u), Some(p)) => (u.clone(), p.clone()),
+                _ => anyhow::bail!("matrix bot_username/bot_password not configured"),
+            };
+            let homeserver_url = config.homeserver_url.clone();
+            let room_id = config.room_id.clone();
+            drop(config);
+
+            let data_dir = dirs::data_dir()
+                .unwrap_or_else(|| std::path::PathBuf::from("."))
+                .join("gluebox")
+                .join("matrix-store");
+
+            let bot = MatrixBot::login(
+                &homeserver_url,
+                &username,
+                &password,
+                &room_id,
+                data_dir,
+            ).await?;
+            bot.initial_sync().await?;
+
+            let bot = Arc::new(bot);
+            self.spawn_sync_task(&bot).await;
+            *self.bot.lock().await = Some(bot);
+            self.status.store(ConnectorStatus::Running.as_u8(), Ordering::SeqCst);
+            Ok(())
+        })
+    }
+
+    fn stop(&self) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + '_>> {
+        Box::pin(async move {
+            if let Some(token) = self.cancel_token.lock().await.take() {
+                token.cancel();
+            }
+            *self.bot.lock().await = None;
+            self.status.store(ConnectorStatus::Stopped.as_u8(), Ordering::SeqCst);
+            Ok(())
+        })
+    }
+
+    fn suspend(&self) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + '_>> {
+        Box::pin(async move {
+            if let Some(token) = self.cancel_token.lock().await.take() {
+                token.cancel();
+            }
+            self.status.store(ConnectorStatus::Suspended.as_u8(), Ordering::SeqCst);
+            Ok(())
+        })
+    }
+
+    fn resume(&self) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + '_>> {
+        Box::pin(async move {
+            let bot_guard = self.bot.lock().await;
+            let bot = bot_guard.clone()
+                .ok_or_else(|| anyhow::anyhow!("matrix bot not available for resume"))?;
+            drop(bot_guard);
+            self.spawn_sync_task(&bot).await;
+            self.status.store(ConnectorStatus::Running.as_u8(), Ordering::SeqCst);
+            Ok(())
+        })
+    }
+
+    fn health_check(&self) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + '_>> {
+        Box::pin(async move {
+            if self.bot.lock().await.is_some() {
+                Ok(())
+            } else {
+                anyhow::bail!("matrix connector not running")
+            }
+        })
+    }
+
+    fn reconfigure(
+        &self,
+        raw_toml: &toml::Value,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<bool>> + Send + '_>> {
+        let result = raw_toml.clone().try_into::<crate::config::MatrixConfig>();
+        Box::pin(async move {
+            let new_config = result.map_err(|e| anyhow::anyhow!("invalid matrix config: {e}"))?;
+            *self.config.lock().await = new_config;
+            Ok(true)
+        })
+    }
+}

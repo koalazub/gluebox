@@ -1,7 +1,6 @@
 use std::sync::Arc;
 use crate::AppState;
-use crate::connectors::anytype::AnytypeClient;
-use crate::connectors::linear::LinearClient;
+use super::{linear_from_registry, anytype_from_registry};
 
 pub async fn run_nightly(state: &Arc<AppState>) -> anyhow::Result<()> {
     tracing::info!("trigger 8: starting nightly reconciliation");
@@ -15,10 +14,10 @@ pub async fn run_nightly(state: &Arc<AppState>) -> anyhow::Result<()> {
         "reconciliation scan complete"
     );
 
-    if let Some(ref at_cfg) = state.cfg.anytype {
-        let anytype = AnytypeClient::new(&at_cfg.api_url, &at_cfg.api_key, &at_cfg.space_id);
-        let linear = LinearClient::new(&state.cfg.linear.api_key);
+    let anytype = anytype_from_registry(state).await;
+    let linear = linear_from_registry(state).await;
 
+    if let (Ok(anytype), Ok(linear)) = (&anytype, &linear) {
         for spec in &missing_anytype {
             tracing::info!(linear_id = %spec.linear_issue_id, "reconcile: spec missing anytype link");
             let issue = linear.get_issue(&spec.linear_issue_id).await?;
@@ -45,7 +44,7 @@ pub async fn run_nightly(state: &Arc<AppState>) -> anyhow::Result<()> {
             tracing::info!(linear_id = %spec.linear_issue_id, anytype_id = %obj.id, "reconcile: created missing anytype spec");
         }
     } else if !missing_anytype.is_empty() {
-        tracing::info!(count = missing_anytype.len(), "reconcile: anytype not configured, skipping spec creation");
+        tracing::info!(count = missing_anytype.len(), "reconcile: anytype or linear not available, skipping spec creation");
     }
 
     for spec in &missing_linear {

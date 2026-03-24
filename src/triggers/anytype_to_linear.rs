@@ -1,6 +1,6 @@
 use std::sync::Arc;
 use crate::AppState;
-use crate::connectors::linear::LinearClient;
+use super::linear_from_registry;
 
 pub async fn anytype_spec_changed(
     state: &Arc<AppState>,
@@ -11,7 +11,7 @@ pub async fn anytype_spec_changed(
         return Ok(());
     };
 
-    let linear = LinearClient::new(&state.cfg.linear.api_key);
+    let linear = linear_from_registry(state).await?;
 
     let comment = format!(
         "Spec updated in Anytype (object: `{}`). [View in Anytype](anytype://object/{})",

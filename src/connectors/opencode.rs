@@ -1,7 +1,14 @@
 use reqwest;
 use serde::Deserialize;
 use serde_json::json;
+use std::any::Any;
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::pin::Pin;
+use std::future::Future;
+use tokio::sync::Mutex;
+use crate::connector::{Connector, ConnectorStatus};
 
+#[derive(Clone)]
 pub struct OpenCodeClient {
     client: reqwest::Client,
     api_key: String,
@@ -298,12 +305,101 @@ pub enum IntentKind {
     Chat,
 }
 
-/// A cluster of related feedback items extracted from one or more messages.
 #[derive(Debug, serde::Deserialize)]
 pub struct FeedbackCluster {
     pub title: String,
     pub description: String,
-    /// One of: "bug" | "feature" | "ux" | "performance" | "docs" | "other"
     pub category: String,
     pub items: Vec<String>,
+}
+
+pub struct OpenCodeConnector {
+    config: Mutex<crate::config::OpenCodeConfig>,
+    client: Mutex<Option<OpenCodeClient>>,
+    status: AtomicU8,
+    error_msg: Mutex<Option<String>>,
+}
+
+impl OpenCodeConnector {
+    pub fn new(config: crate::config::OpenCodeConfig) -> Self {
+        Self {
+            config: Mutex::new(config),
+            client: Mutex::new(None),
+            status: AtomicU8::new(ConnectorStatus::Stopped.as_u8()),
+            error_msg: Mutex::new(None),
+        }
+    }
+
+    pub async fn client(&self) -> anyhow::Result<OpenCodeClient> {
+        self.client
+            .lock()
+            .await
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("opencode connector not running"))
+    }
+}
+
+impl Connector for OpenCodeConnector {
+    fn name(&self) -> &'static str {
+        "opencode"
+    }
+
+    fn status(&self) -> ConnectorStatus {
+        match self.status.load(Ordering::SeqCst) {
+            0 => ConnectorStatus::Running,
+            1 => ConnectorStatus::Stopped,
+            2 => ConnectorStatus::Suspended,
+            _ => {
+                let msg = self.error_msg.blocking_lock()
+                    .clone()
+                    .unwrap_or_default();
+                ConnectorStatus::Error(msg)
+            }
+        }
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn start(&self) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + '_>> {
+        Box::pin(async move {
+            let config = self.config.lock().await;
+            let new_client = OpenCodeClient::new(&config.api_key);
+            drop(config);
+            *self.client.lock().await = Some(new_client);
+            self.status.store(ConnectorStatus::Running.as_u8(), Ordering::SeqCst);
+            Ok(())
+        })
+    }
+
+    fn stop(&self) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + '_>> {
+        Box::pin(async move {
+            *self.client.lock().await = None;
+            self.status.store(ConnectorStatus::Stopped.as_u8(), Ordering::SeqCst);
+            Ok(())
+        })
+    }
+
+    fn health_check(&self) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + '_>> {
+        Box::pin(async move {
+            if self.client.lock().await.is_some() {
+                Ok(())
+            } else {
+                anyhow::bail!("opencode connector not running")
+            }
+        })
+    }
+
+    fn reconfigure(
+        &self,
+        raw_toml: &toml::Value,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<bool>> + Send + '_>> {
+        let result = raw_toml.clone().try_into::<crate::config::OpenCodeConfig>();
+        Box::pin(async move {
+            let new_config = result.map_err(|e| anyhow::anyhow!("invalid opencode config: {e}"))?;
+            *self.config.lock().await = new_config;
+            Ok(true)
+        })
+    }
 }

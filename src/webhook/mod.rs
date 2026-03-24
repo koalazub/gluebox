@@ -3,17 +3,17 @@ mod verify;
 use std::sync::Arc;
 use axum::{
     Json, Router,
-    extract::State,
+    extract::{Path, State},
     http::{HeaderMap, StatusCode},
     routing::{get, post},
 };
 use bytes::Bytes;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::AppState;
 use crate::triggers;
 use crate::triggers::to_matrix;
-use crate::connectors::opencode::OpenCodeClient;
+use crate::triggers::opencode_from_registry;
 use crate::openclaw::process_feedback_clusters;
 
 pub fn router(state: Arc<AppState>) -> Router {
@@ -24,6 +24,12 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/webhooks/github", post(handle_github))
         .route("/api/notify", post(handle_notify))
         .route("/api/feedback", post(handle_feedback))
+        .route("/admin/status", get(admin_status))
+        .route("/admin/connectors", get(admin_connectors))
+        .route("/admin/connectors/{name}/toggle", post(admin_toggle))
+        .route("/admin/reload", post(admin_reload))
+        .route("/admin/spike", post(admin_spike))
+        .route("/admin/power", get(admin_power))
         .with_state(state)
 }
 
@@ -36,12 +42,21 @@ async fn handle_linear(
     headers: HeaderMap,
     body: Bytes,
 ) -> StatusCode {
+    state.power.spike();
+    let webhook_secret = {
+        let cfg = state.config.read().await;
+        let Some(ref linear_cfg) = cfg.linear else {
+            return StatusCode::SERVICE_UNAVAILABLE;
+        };
+        linear_cfg.webhook_secret.clone()
+    };
+
     let signature = headers
         .get("linear-signature")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
 
-    if !verify::linear_signature(signature, &body, &state.cfg.linear.webhook_secret) {
+    if !verify::linear_signature(signature, &body, &webhook_secret) {
         tracing::warn!("linear webhook signature verification failed");
         return StatusCode::UNAUTHORIZED;
     }
@@ -105,8 +120,13 @@ async fn handle_github(
     headers: HeaderMap,
     body: Bytes,
 ) -> StatusCode {
-    let Some(gh_cfg) = &state.cfg.github else {
-        return StatusCode::NOT_FOUND;
+    state.power.spike();
+    let gh_webhook_secret = {
+        let cfg = state.config.read().await;
+        let Some(ref gh_cfg) = cfg.github else {
+            return StatusCode::NOT_FOUND;
+        };
+        gh_cfg.webhook_secret.clone()
     };
 
     let signature = headers
@@ -114,7 +134,7 @@ async fn handle_github(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
 
-    if !verify::github_signature(signature, &body, &gh_cfg.webhook_secret) {
+    if !verify::github_signature(signature, &body, &gh_webhook_secret) {
         tracing::warn!("github webhook signature verification failed");
         return StatusCode::UNAUTHORIZED;
     }
@@ -166,12 +186,21 @@ async fn handle_documenso(
     headers: HeaderMap,
     body: Bytes,
 ) -> StatusCode {
+    state.power.spike();
     let secret = headers
         .get("x-documenso-secret")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
 
-    if !verify::documenso_secret(secret, &state.cfg.documenso.webhook_secret) {
+    let documenso_webhook_secret = {
+        let cfg = state.config.read().await;
+        let Some(ref documenso_cfg) = cfg.documenso else {
+            return StatusCode::SERVICE_UNAVAILABLE;
+        };
+        documenso_cfg.webhook_secret.clone()
+    };
+
+    if !verify::documenso_secret(secret, &documenso_webhook_secret) {
         tracing::warn!("documenso webhook secret verification failed");
         return StatusCode::UNAUTHORIZED;
     }
@@ -267,8 +296,13 @@ async fn handle_feedback(
     headers: HeaderMap,
     Json(req): Json<FeedbackRequest>,
 ) -> StatusCode {
-    let Some(ref secret) = state.cfg.notify_secret else {
-        return StatusCode::NOT_FOUND;
+    state.power.spike();
+    let notify_secret = {
+        let cfg = state.config.read().await;
+        let Some(ref secret) = cfg.notify_secret else {
+            return StatusCode::NOT_FOUND;
+        };
+        secret.clone()
     };
 
     let provided = headers
@@ -277,22 +311,19 @@ async fn handle_feedback(
         .and_then(|v| v.strip_prefix("Bearer "))
         .unwrap_or("");
 
-    if !verify::constant_time_eq_pub(provided.as_bytes(), secret.as_bytes()) {
+    if !verify::constant_time_eq_pub(provided.as_bytes(), notify_secret.as_bytes()) {
         return StatusCode::UNAUTHORIZED;
     }
 
-    let Some(ref opencode_cfg) = state.cfg.opencode else {
-        return StatusCode::SERVICE_UNAVAILABLE;
+    let ai = match opencode_from_registry(&state).await {
+        Ok(c) => Arc::new(c),
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE,
     };
 
-    let api_key = opencode_cfg.api_key.clone();
-
     tokio::spawn(async move {
-        let ai = Arc::new(OpenCodeClient::new(&api_key));
 
         let mut llm_input = req.message.clone();
         
-        // Add user-provided category as context for the LLM
         if !req.category.is_empty() {
             llm_input = format!("[Category: {}]\n\n{}", req.category, llm_input);
         }
@@ -350,9 +381,18 @@ async fn handle_notify(
     headers: HeaderMap,
     Json(req): Json<NotifyRequest>,
 ) -> StatusCode {
-    let Some(ref secret) = state.cfg.notify_secret else {
-        tracing::warn!("notify endpoint called but notify_secret not configured");
-        return StatusCode::NOT_FOUND;
+    state.power.spike();
+    let (notify_secret, default_room_id) = {
+        let cfg = state.config.read().await;
+        let Some(ref secret) = cfg.notify_secret else {
+            tracing::warn!("notify endpoint called but notify_secret not configured");
+            return StatusCode::NOT_FOUND;
+        };
+        let Some(ref matrix_cfg) = cfg.matrix else {
+            tracing::error!("notify endpoint: matrix not configured");
+            return StatusCode::SERVICE_UNAVAILABLE;
+        };
+        (secret.clone(), matrix_cfg.room_id.clone())
     };
 
     let provided = headers
@@ -361,18 +401,35 @@ async fn handle_notify(
         .and_then(|v| v.strip_prefix("Bearer "))
         .unwrap_or("");
 
-    if !verify::constant_time_eq_pub(provided.as_bytes(), secret.as_bytes()) {
+    if !verify::constant_time_eq_pub(provided.as_bytes(), notify_secret.as_bytes()) {
         tracing::warn!("notify endpoint: invalid bearer token");
         return StatusCode::UNAUTHORIZED;
     }
 
-    let Some(bot) = &state.matrix_bot else {
-        tracing::error!("notify endpoint: matrix bot not initialised");
-        return StatusCode::SERVICE_UNAVAILABLE;
+    let matrix_conn = match state.registry.get_dyn("matrix").await {
+        Some(c) => c,
+        None => {
+            tracing::error!("notify endpoint: matrix connector not registered");
+            return StatusCode::SERVICE_UNAVAILABLE;
+        }
+    };
+    let matrix_connector = match matrix_conn.as_any().downcast_ref::<crate::connectors::matrix::MatrixConnector>() {
+        Some(c) => c,
+        None => {
+            tracing::error!("notify endpoint: registry 'matrix' is not MatrixConnector");
+            return StatusCode::SERVICE_UNAVAILABLE;
+        }
+    };
+    let bot = match matrix_connector.bot().await {
+        Ok(b) => b,
+        Err(_) => {
+            tracing::error!("notify endpoint: matrix bot not running");
+            return StatusCode::SERVICE_UNAVAILABLE;
+        }
     };
 
     let target = req.room_id.as_deref()
-        .unwrap_or(state.cfg.matrix.room_id.as_str());
+        .unwrap_or(default_room_id.as_str());
 
     let result = match req.format {
         NotifyFormat::Plain => bot.send_to_room(target, &req.message).await,
@@ -389,4 +446,158 @@ async fn handle_notify(
             StatusCode::INTERNAL_SERVER_ERROR
         }
     }
+}
+
+async fn check_admin_auth(state: &Arc<AppState>, headers: &HeaderMap) -> Result<(), StatusCode> {
+    let cfg = state.config.read().await;
+    let secret = cfg.notify_secret.as_deref().ok_or(StatusCode::FORBIDDEN)?;
+    let provided = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+    if provided != secret {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    Ok(())
+}
+
+#[derive(Serialize)]
+struct ConnectorInfo {
+    name: String,
+    status: String,
+}
+
+#[derive(Serialize)]
+struct AdminStatusResponse {
+    power_state: String,
+    potential: f64,
+    threshold: f64,
+    uptime_secs: u64,
+    connectors: Vec<ConnectorInfo>,
+    events_per_min: f64,
+}
+
+#[derive(Serialize)]
+struct AdminPowerResponse {
+    state: String,
+    potential: f64,
+    threshold: f64,
+}
+
+fn connector_status_str(status: &crate::connector::ConnectorStatus) -> String {
+    match status {
+        crate::connector::ConnectorStatus::Running => "running".to_string(),
+        crate::connector::ConnectorStatus::Stopped => "stopped".to_string(),
+        crate::connector::ConnectorStatus::Suspended => "suspended".to_string(),
+        crate::connector::ConnectorStatus::Error(e) => format!("error: {e}"),
+    }
+}
+
+fn power_state_str(state: &crate::power::PowerState) -> String {
+    match state {
+        crate::power::PowerState::Active => "active".to_string(),
+        crate::power::PowerState::Resting => "resting".to_string(),
+    }
+}
+
+async fn admin_status(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Json<AdminStatusResponse>, StatusCode> {
+    check_admin_auth(&state, &headers).await?;
+
+    let connectors = state
+        .registry
+        .list()
+        .await
+        .into_iter()
+        .map(|(name, status)| ConnectorInfo {
+            name,
+            status: connector_status_str(&status),
+        })
+        .collect();
+
+    Ok(Json(AdminStatusResponse {
+        power_state: power_state_str(&state.power.state()),
+        potential: state.power.potential(),
+        threshold: state.power.threshold(),
+        uptime_secs: state.started_at.elapsed().as_secs(),
+        connectors,
+        events_per_min: 0.0,
+    }))
+}
+
+async fn admin_connectors(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<ConnectorInfo>>, StatusCode> {
+    check_admin_auth(&state, &headers).await?;
+
+    let connectors = state
+        .registry
+        .list()
+        .await
+        .into_iter()
+        .map(|(name, status)| ConnectorInfo {
+            name,
+            status: connector_status_str(&status),
+        })
+        .collect();
+
+    Ok(Json(connectors))
+}
+
+async fn admin_toggle(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(name): Path<String>,
+) -> Result<Json<ConnectorInfo>, StatusCode> {
+    check_admin_auth(&state, &headers).await?;
+
+    let new_status = state
+        .registry
+        .toggle(&name)
+        .await
+        .map_err(|_| StatusCode::NOT_FOUND)?;
+
+    Ok(Json(ConnectorInfo {
+        name,
+        status: connector_status_str(&new_status),
+    }))
+}
+
+async fn admin_reload(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    check_admin_auth(&state, &headers).await?;
+    match crate::daemon::reload(&state).await {
+        Ok(msg) => Ok(Json(serde_json::json!({"result": msg}))),
+        Err(e) => {
+            tracing::error!(%e, "admin reload failed");
+            Ok(Json(serde_json::json!({"error": e.to_string()})))
+        }
+    }
+}
+
+async fn admin_spike(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    check_admin_auth(&state, &headers).await?;
+    state.power.spike();
+    Ok(Json(serde_json::json!({"result": "spike sent"})))
+}
+
+async fn admin_power(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Json<AdminPowerResponse>, StatusCode> {
+    check_admin_auth(&state, &headers).await?;
+    Ok(Json(AdminPowerResponse {
+        state: power_state_str(&state.power.state()),
+        potential: state.power.potential(),
+        threshold: state.power.threshold(),
+    }))
 }

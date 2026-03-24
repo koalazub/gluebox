@@ -1,8 +1,8 @@
 use std::sync::Arc;
 use serde_json::Value;
 use crate::AppState;
-use crate::connectors::linear::LinearClient;
 use super::to_matrix;
+use super::linear_from_registry;
 
 pub async fn github_issue_opened(state: &Arc<AppState>, payload: &Value) -> anyhow::Result<()> {
     let number = payload["issue"]["number"].as_i64().unwrap_or(0);
@@ -16,9 +16,13 @@ pub async fn github_issue_opened(state: &Arc<AppState>, payload: &Value) -> anyh
         return Ok(());
     }
 
-    let linear = LinearClient::new(&state.cfg.linear.api_key);
+    let linear = linear_from_registry(state).await?;
+    let team_id = {
+        let cfg = state.config.read().await;
+        cfg.linear.as_ref().and_then(|c| c.team_id.clone())
+    };
     let description = format!("Synced from GitHub: {html_url}\n\n{body}");
-    let resp = linear.create_issue(title, &description, state.cfg.linear.team_id.as_deref()).await?;
+    let resp = linear.create_issue(title, &description, team_id.as_deref()).await?;
 
     let linear_id = resp["data"]["issueCreate"]["issue"]["id"].as_str().unwrap_or_default();
     let linear_url = resp["data"]["issueCreate"]["issue"]["url"].as_str().unwrap_or_default();

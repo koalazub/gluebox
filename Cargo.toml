@@ -23,9 +23,11 @@ thiserror = "2"
 url = "2"
 toml = "0.8"
 anyhow = "1"
+clap = { version = "4", features = ["derive"] }
 urlencoding = "2"
 matrix-sdk = { version = "0.16", default-features = false, features = ["e2e-encryption", "sqlite", "rustls-tls"] }
 dirs = "6"
+tokio-util = { version = "0.7", features = ["rt"] }
 
 [profile.release]
 strip = true

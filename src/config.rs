@@ -1,20 +1,22 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Config {
     pub listen_addr: String,
     pub notify_secret: Option<String>,
-    pub linear: LinearConfig,
+    pub linear: Option<LinearConfig>,
     pub anytype: Option<AnytypeConfig>,
-    pub matrix: MatrixConfig,
-    pub documenso: DocumensoConfig,
+    pub matrix: Option<MatrixConfig>,
+    pub documenso: Option<DocumensoConfig>,
     pub opencode: Option<OpenCodeConfig>,
     pub turso: TursoConfig,
     pub github: Option<GithubConfig>,
+    pub socket_path: Option<String>,
+    pub power: Option<PowerConfig>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TursoConfig {
     pub url: String,
     pub auth_token: String,
@@ -23,33 +25,33 @@ pub struct TursoConfig {
     pub encryption_key: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct GithubConfig {
     pub token: String,
     pub repo: String,
     pub webhook_secret: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct OpenCodeConfig {
     pub api_key: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct LinearConfig {
     pub api_key: String,
     pub webhook_secret: String,
     pub team_id: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AnytypeConfig {
     pub api_url: String,
     pub api_key: String,
     pub space_id: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MatrixConfig {
     pub homeserver_url: String,
     pub access_token: String,
@@ -60,11 +62,32 @@ pub struct MatrixConfig {
     pub bot_password: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct DocumensoConfig {
     pub api_url: String,
     pub api_key: String,
     pub webhook_secret: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PowerConfig {
+    pub threshold: f64,
+    pub decay_rate: f64,
+    pub tick_interval_secs: u64,
+    pub spike_weight: f64,
+    pub min_active_secs: u64,
+}
+
+impl Default for PowerConfig {
+    fn default() -> Self {
+        Self {
+            threshold: 5.0,
+            decay_rate: 0.5,
+            tick_interval_secs: 30,
+            spike_weight: 2.0,
+            min_active_secs: 10,
+        }
+    }
 }
 
 impl Config {

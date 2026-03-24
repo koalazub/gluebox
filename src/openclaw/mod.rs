@@ -1,8 +1,8 @@
 use crate::AppState;
 use crate::connectors::matrix::MatrixBot;
 use crate::connectors::opencode::{OpenCodeClient, ExistingIssueSummary, FeedbackCluster, IntentKind};
-use crate::connectors::linear::LinearClient;
 use crate::triggers::to_matrix;
+use crate::triggers::{linear_from_registry, opencode_from_registry};
 use std::sync::Arc;
 use matrix_sdk::{
     config::SyncSettings,
@@ -14,10 +14,10 @@ use matrix_sdk::{
 };
 
 pub async fn start_openclaw(state: Arc<AppState>, bot: Arc<MatrixBot>) {
-    let ai = match &state.cfg.opencode {
-        Some(cfg) => Arc::new(OpenCodeClient::new(&cfg.api_key)),
-        None => {
-            tracing::warn!("opencode not configured, openclaw disabled");
+    let ai = match opencode_from_registry(&state).await {
+        Ok(client) => Arc::new(client),
+        Err(_) => {
+            tracing::warn!("opencode connector not available, openclaw disabled");
             return;
         }
     };
@@ -83,7 +83,6 @@ pub async fn start_openclaw(state: Arc<AppState>, bot: Arc<MatrixBot>) {
 fn fast_classify(msg: &str) -> Option<(IntentKind, String)> {
     let lower = msg.to_lowercase();
 
-    // !feedback always routes directly to the feedback pipeline
     if lower.starts_with("!feedback") || lower.starts_with("feedback:") {
         let body = msg
             .trim_start_matches("!feedback")
@@ -165,7 +164,7 @@ async fn handle_message(
         IntentKind::Issue => {
             bot.send_message("Creating issue...").await?;
             let (title, description) = ai.draft_issue(&prompt).await?;
-            let linear = LinearClient::new(&state.cfg.linear.api_key);
+            let linear = linear_from_registry(state).await?;
             let resp = linear.create_issue(&title, &description, None).await?;
             let url = resp["data"]["issueCreate"]["issue"]["url"]
                 .as_str()
@@ -237,9 +236,20 @@ pub async fn process_feedback_clusters(
     clusters: &[FeedbackCluster],
     context: Option<&crate::webhook::FeedbackContext>,
 ) -> Vec<String> {
-    let linear = LinearClient::new(&state.cfg.linear.api_key);
+    let linear = match linear_from_registry(state).await {
+        Ok(c) => c,
+        Err(_) => {
+            tracing::error!("feedback: linear connector not available");
+            return vec!["Linear not available — cannot process feedback".to_string()];
+        }
+    };
 
-    let team_id = match state.cfg.linear.team_id.as_deref() {
+    let linear_team_id_opt = {
+        let cfg = state.config.read().await;
+        cfg.linear.as_ref().and_then(|c| c.team_id.clone())
+    };
+
+    let team_id = match linear_team_id_opt.as_deref() {
         Some(id) => id.to_string(),
         None => {
             match linear.graphql("query { teams { nodes { id } } }", None).await {
@@ -383,7 +393,6 @@ fn build_issue_description(
             desc.push_str(&format!("\n\n**Page:** {}", ctx.url));
         }
         
-        // Build reporter info with username and timestamp
         let mut reporter_parts = vec![];
         if !ctx.username.is_empty() && ctx.username != "anonymous" {
             reporter_parts.push(format!("@{}", ctx.username));
@@ -430,7 +439,6 @@ fn build_issue_description(
             }
             desc.push_str("```");
         }
-        // Check if there's a screenshot
         if !ctx.screenshot_id.is_empty() {
             desc.push_str(&format!("\n\n**Screenshot:** ID `{}` (retrieve from blob storage)", ctx.screenshot_id));
         }

@@ -1,7 +1,14 @@
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::any::Any;
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::pin::Pin;
+use std::future::Future;
+use tokio::sync::Mutex;
+use crate::connector::{Connector, ConnectorStatus};
 
+#[derive(Clone)]
 pub struct AnytypeClient {
     client: Client,
     base_url: String,
@@ -150,5 +157,97 @@ impl AnytypeClient {
             }
         }
         Ok(())
+    }
+}
+
+pub struct AnytypeConnector {
+    config: Mutex<crate::config::AnytypeConfig>,
+    client: Mutex<Option<AnytypeClient>>,
+    status: AtomicU8,
+    error_msg: Mutex<Option<String>>,
+}
+
+impl AnytypeConnector {
+    pub fn new(config: crate::config::AnytypeConfig) -> Self {
+        Self {
+            config: Mutex::new(config),
+            client: Mutex::new(None),
+            status: AtomicU8::new(ConnectorStatus::Stopped.as_u8()),
+            error_msg: Mutex::new(None),
+        }
+    }
+
+    pub async fn client(&self) -> anyhow::Result<AnytypeClient> {
+        self.client
+            .lock()
+            .await
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("anytype connector not running"))
+    }
+}
+
+impl Connector for AnytypeConnector {
+    fn name(&self) -> &'static str {
+        "anytype"
+    }
+
+    fn status(&self) -> ConnectorStatus {
+        match self.status.load(Ordering::SeqCst) {
+            0 => ConnectorStatus::Running,
+            1 => ConnectorStatus::Stopped,
+            2 => ConnectorStatus::Suspended,
+            _ => {
+                let msg = self.error_msg.blocking_lock()
+                    .clone()
+                    .unwrap_or_default();
+                ConnectorStatus::Error(msg)
+            }
+        }
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn start(&self) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + '_>> {
+        Box::pin(async move {
+            let config = self.config.lock().await;
+            let new_client = AnytypeClient::new(&config.api_url, &config.api_key, &config.space_id);
+            drop(config);
+            new_client.ensure_types().await?;
+            *self.client.lock().await = Some(new_client);
+            self.status.store(ConnectorStatus::Running.as_u8(), Ordering::SeqCst);
+            Ok(())
+        })
+    }
+
+    fn stop(&self) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + '_>> {
+        Box::pin(async move {
+            *self.client.lock().await = None;
+            self.status.store(ConnectorStatus::Stopped.as_u8(), Ordering::SeqCst);
+            Ok(())
+        })
+    }
+
+    fn health_check(&self) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + '_>> {
+        Box::pin(async move {
+            if self.client.lock().await.is_some() {
+                Ok(())
+            } else {
+                anyhow::bail!("anytype connector not running")
+            }
+        })
+    }
+
+    fn reconfigure(
+        &self,
+        raw_toml: &toml::Value,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<bool>> + Send + '_>> {
+        let result = raw_toml.clone().try_into::<crate::config::AnytypeConfig>();
+        Box::pin(async move {
+            let new_config = result.map_err(|e| anyhow::anyhow!("invalid anytype config: {e}"))?;
+            *self.config.lock().await = new_config;
+            Ok(true)
+        })
     }
 }
