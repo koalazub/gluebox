@@ -64,6 +64,10 @@ impl Db {
                 }
                 builder.build().await?
             }
+            None if turso.url.starts_with("file:") => {
+                let path = turso.url.strip_prefix("file:").unwrap();
+                Builder::new_local(path).build().await?
+            }
             None => Builder::new_remote(turso.url.clone(), turso.auth_token.clone())
                 .build()
                 .await?,
