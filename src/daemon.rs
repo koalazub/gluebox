@@ -2,6 +2,7 @@ use std::sync::Arc;
 use crate::AppState;
 use crate::config::Config;
 use crate::connectors;
+use crate::triggers;
 
 pub async fn reload(state: &Arc<AppState>) -> anyhow::Result<String> {
     let new_cfg = Config::load()?;
@@ -153,37 +154,42 @@ pub async fn reload(state: &Arc<AppState>) -> anyhow::Result<String> {
         _ => {}
     }
 
-    match (&old_cfg.affine, &new_cfg.affine) {
-        (None, Some(new)) => {
-            let connector = Arc::new(connectors::affine::AffineConnector::new(new.clone()));
-            state.registry.register("affine".into(), connector).await?;
-            changes.push("affine: added".into());
-        }
-        (Some(_), None) => {
+    if old_cfg.affine != new_cfg.affine {
+        if new_cfg.affine.is_empty() {
             state.registry.deregister("affine").await?;
             changes.push("affine: removed".into());
-        }
-        (Some(old), Some(new)) if old != new => {
+        } else if old_cfg.affine.is_empty() {
+            let connector = Arc::new(connectors::affine::AffineConnector::new(new_cfg.affine.clone()));
+            state.registry.register("affine".into(), connector).await?;
+            changes.push("affine: added".into());
+        } else {
             if let Some(conn) = state.registry.get_dyn("affine").await {
-                let toml_val = toml::Value::try_from(new.clone())?;
+                let toml_val = toml::Value::try_from(new_cfg.affine.clone())?;
                 let reconfigured = conn.reconfigure(&toml_val).await?;
                 if !reconfigured {
                     state.registry.deregister("affine").await?;
-                    let connector = Arc::new(connectors::affine::AffineConnector::new(new.clone()));
+                    let connector = Arc::new(connectors::affine::AffineConnector::new(new_cfg.affine.clone()));
                     state.registry.register("affine".into(), connector).await?;
                 }
             }
             changes.push("affine: reconfigured".into());
         }
-        _ => {}
     }
 
     match (&old_cfg.watcher, &new_cfg.watcher) {
         (None, Some(new)) => {
+            let import_state = state.clone();
             let connector = Arc::new(connectors::session_watcher::SessionWatcherConnector::new(
                 new.clone(),
-                Box::new(|session_id| {
-                    tracing::info!(session_id, "watcher detected session ready for import");
+                Arc::new(move |session_id: String| {
+                    let s = import_state.clone();
+                    tokio::spawn(async move {
+                        if s.db.is_imported(&session_id).await.unwrap_or(true) { return; }
+                        tracing::info!(session_id, "auto-importing detected session");
+                        if let Err(e) = triggers::session_import::import_session(&s, &session_id).await {
+                            tracing::error!(session_id, "auto-import failed: {e}");
+                        }
+                    });
                 }),
             ));
             state.registry.register("watcher".into(), connector).await?;
@@ -195,14 +201,51 @@ pub async fn reload(state: &Arc<AppState>) -> anyhow::Result<String> {
         }
         (Some(old), Some(new)) if old != new => {
             state.registry.deregister("watcher").await?;
+            let import_state = state.clone();
             let connector = Arc::new(connectors::session_watcher::SessionWatcherConnector::new(
                 new.clone(),
-                Box::new(|session_id| {
-                    tracing::info!(session_id, "watcher detected session ready for import");
+                Arc::new(move |session_id: String| {
+                    let s = import_state.clone();
+                    tokio::spawn(async move {
+                        if s.db.is_imported(&session_id).await.unwrap_or(true) { return; }
+                        tracing::info!(session_id, "auto-importing detected session");
+                        if let Err(e) = triggers::session_import::import_session(&s, &session_id).await {
+                            tracing::error!(session_id, "auto-import failed: {e}");
+                        }
+                    });
                 }),
             ));
             state.registry.register("watcher".into(), connector).await?;
             changes.push("watcher: reconfigured".into());
+        }
+        _ => {}
+    }
+
+    match (&old_cfg.stonkwatch_social, &new_cfg.stonkwatch_social) {
+        (None, Some(new)) => {
+            let connector = Arc::new(
+                connectors::stonkwatch_social::StonkwatchSocialConnector::new(new.clone()),
+            );
+            state.registry.register("stonkwatch_social".into(), connector).await?;
+            changes.push("stonkwatch_social: added".into());
+        }
+        (Some(_), None) => {
+            state.registry.deregister("stonkwatch_social").await?;
+            changes.push("stonkwatch_social: removed".into());
+        }
+        (Some(old), Some(new)) if old != new => {
+            if let Some(conn) = state.registry.get_dyn("stonkwatch_social").await {
+                let toml_val = toml::Value::try_from(new.clone())?;
+                let reconfigured = conn.reconfigure(&toml_val).await?;
+                if !reconfigured {
+                    state.registry.deregister("stonkwatch_social").await?;
+                    let connector = Arc::new(
+                        connectors::stonkwatch_social::StonkwatchSocialConnector::new(new.clone()),
+                    );
+                    state.registry.register("stonkwatch_social".into(), connector).await?;
+                }
+            }
+            changes.push("stonkwatch_social: reconfigured".into());
         }
         _ => {}
     }

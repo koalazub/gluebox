@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 fn default_sessions_dir() -> PathBuf {
@@ -25,8 +26,10 @@ pub struct Config {
     pub github: Option<GithubConfig>,
     pub socket_path: Option<String>,
     pub power: Option<PowerConfig>,
-    pub affine: Option<AffineConfig>,
+    #[serde(default, deserialize_with = "deserialize_affine_workspaces")]
+    pub affine: HashMap<String, AffineConfig>,
     pub watcher: Option<WatcherConfig>,
+    pub stonkwatch_social: Option<StonkwatchSocialConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -75,11 +78,48 @@ pub struct MatrixConfig {
     pub bot_password: Option<String>,
 }
 
+fn default_output_dir() -> PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+    PathBuf::from(home).join("Documents/gluebox-study")
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AffineConfig {
     pub api_url: String,
     pub api_token: String,
     pub workspace_id: String,
+    /// Streamable-HTTP MCP endpoint for this workspace (e.g.
+    /// https://app.affine.pro/api/workspaces/{id}/mcp).
+    /// Used for doc creation when available.
+    #[serde(default)]
+    pub mcp_url: Option<String>,
+    #[serde(default = "default_output_dir")]
+    pub output_dir: PathBuf,
+}
+
+/// Deserialize `[affine]` as either a single workspace (old format) or
+/// a map of named workspaces (`[affine.default]`, `[affine.stonkington]`).
+fn deserialize_affine_workspaces<'de, D>(
+    deserializer: D,
+) -> Result<HashMap<String, AffineConfig>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum AffineEntry {
+        Single(AffineConfig),
+        Multi(HashMap<String, AffineConfig>),
+    }
+    match Option::<AffineEntry>::deserialize(deserializer)? {
+        None => Ok(HashMap::new()),
+        Some(AffineEntry::Single(cfg)) => {
+            let mut map = HashMap::new();
+            map.insert("default".into(), cfg);
+            Ok(map)
+        }
+        Some(AffineEntry::Multi(map)) => Ok(map),
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -175,4 +215,48 @@ mod tests {
         assert!((p.spike_weight - 2.0).abs() < f64::EPSILON);
         assert_eq!(p.min_active_secs, 10);
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct StonkwatchSocialConfig {
+    pub turso_url: String,
+    pub turso_auth_token: String,
+    pub post_interval_secs: Option<u64>,
+    pub x: Option<XConfig>,
+    pub bluesky: Option<BlueskyConfig>,
+    pub instagram: Option<InstagramConfig>,
+    pub facebook: Option<FacebookConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct XConfig {
+    pub api_key: String,
+    pub api_secret: String,
+    pub access_token: String,
+    pub access_secret: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct BlueskyConfig {
+    pub identifier: String,
+    pub password: String,
+    #[serde(default = "default_bluesky_service_url")]
+    pub service_url: String,
+}
+
+fn default_bluesky_service_url() -> String {
+    "https://bsky.social".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct InstagramConfig {
+    pub access_token: String,
+    pub ig_user_id: String,
+    pub default_image_url: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FacebookConfig {
+    pub page_access_token: String,
+    pub page_id: String,
 }

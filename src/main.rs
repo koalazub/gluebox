@@ -1,4 +1,4 @@
-#![recursion_limit = "512"]
+#![recursion_limit = "1024"]
 mod config;
 mod power;
 mod db;
@@ -86,19 +86,30 @@ async fn main() -> anyhow::Result<()> {
                 registry.register("opencode".into(), connector).await?;
             }
 
-            if let Some(ref affine_cfg) = cfg.affine {
-                let connector = Arc::new(connectors::affine::AffineConnector::new(affine_cfg.clone()));
+            if !cfg.affine.is_empty() {
+                let connector = Arc::new(connectors::affine::AffineConnector::new(cfg.affine.clone()));
                 registry.register("affine".into(), connector).await?;
             }
 
+            let (auto_import_tx, mut auto_import_rx) = tokio::sync::mpsc::channel::<String>(64);
+
             if let Some(ref watcher_cfg) = cfg.watcher {
+                let tx = auto_import_tx.clone();
                 let connector = Arc::new(connectors::session_watcher::SessionWatcherConnector::new(
                     watcher_cfg.clone(),
-                    Box::new(|session_id| {
-                        tracing::info!(session_id, "watcher detected session ready for import");
+                    Arc::new(move |session_id| {
+                        let _ = tx.try_send(session_id);
                     }),
                 ));
                 registry.register("watcher".into(), connector).await?;
+            }
+            drop(auto_import_tx);
+
+            if let Some(ref social_cfg) = cfg.stonkwatch_social {
+                let connector = Arc::new(
+                    connectors::stonkwatch_social::StonkwatchSocialConnector::new(social_cfg.clone()),
+                );
+                registry.register("stonkwatch_social".into(), connector).await?;
             }
 
             let power_config = cfg.power.clone().unwrap_or_default();
@@ -113,6 +124,22 @@ async fn main() -> anyhow::Result<()> {
                 power: power.clone(),
                 started_at: std::time::Instant::now(),
                 events_tx: events_tx.clone(),
+            });
+
+            // Auto-import sessions detected by the watcher
+            let import_state = state.clone();
+            tokio::spawn(async move {
+                while let Some(session_id) = auto_import_rx.recv().await {
+                    if import_state.db.is_imported(&session_id).await.unwrap_or(true) {
+                        tracing::debug!(session_id, "already imported, skipping");
+                        continue;
+                    }
+                    tracing::info!(session_id, "auto-importing detected session");
+                    match triggers::session_import::import_session(&import_state, &session_id).await {
+                        Ok(msg) => tracing::info!("{msg}"),
+                        Err(e) => tracing::error!(session_id, "auto-import failed: {e}"),
+                    }
+                }
             });
 
             let tick_power = state.power.clone();
