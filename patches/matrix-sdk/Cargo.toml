@@ -168,7 +168,7 @@ version = "0.8.4"
 optional = true
 
 [dependencies.bytes]
-version = "1.11.0"
+version = "1.11.1"
 
 [dependencies.bytesize]
 version = "2.3.0"
