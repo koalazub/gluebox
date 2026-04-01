@@ -53,7 +53,8 @@ pub struct GithubLinearMapping {
 impl Db {
     pub async fn open(turso: &crate::config::TursoConfig) -> anyhow::Result<Self> {
         let db = match &turso.replica_path {
-            Some(path) => {
+            // Embedded replica with remote sync (when url is configured)
+            Some(path) if !turso.url.is_empty() => {
                 if let Some(parent) = path.parent() {
                     std::fs::create_dir_all(parent)?;
                 }
@@ -74,6 +75,13 @@ impl Db {
                 }
                 builder.build().await?
             }
+            // Local-only embedded replica (no remote sync - resilience mode)
+            Some(path) => {
+                if let Some(parent) = path.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                Builder::new_local(path).build().await?
+            }
             None if turso.url.starts_with("file:") => {
                 let path = turso.url.strip_prefix("file:").unwrap();
                 Builder::new_local(path).build().await?
@@ -84,7 +92,8 @@ impl Db {
         };
         let instance = Db { db, persistent_conn: None };
         instance.migrate().await?;
-        if turso.replica_path.is_some() {
+        // Only sync if configured for remote (both replica_path and url present)
+        if turso.replica_path.is_some() && !turso.url.is_empty() {
             instance.db.sync().await?;
         }
         Ok(instance)
