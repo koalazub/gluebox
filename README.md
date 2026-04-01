@@ -296,3 +296,15 @@ cargo test
 # or with nextest
 cargo nextest run
 ```
+
+## Version Control
+
+**Use jj (Jujutsu), not git:**
+
+```sh
+jj new                    # Create new change
+jj describe -m "message"  # Describe current change
+jj git push               # Push to remote
+```
+
+Never use `git commit` or `git push` directly.
