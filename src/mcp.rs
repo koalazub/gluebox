@@ -233,7 +233,7 @@ impl GlueboxMcp {
         &self,
         Parameters(input): Parameters<GenerateSocialInput>,
     ) -> Result<CallToolResult, McpError> {
-        let mut url = format!("{}/api/social/generate", self.base_url);
+        let url = format!("{}/api/social/generate", self.base_url);
         let body = serde_json::json!({ "symbol": input.symbol });
         let resp = self
             .client

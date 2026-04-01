@@ -39,7 +39,8 @@ pub struct Config {
     pub matrix: Option<MatrixConfig>,
     pub documenso: Option<DocumensoConfig>,
     pub opencode: Option<OpenCodeConfig>,
-    pub turso: Option<TursoConfig>,
+    #[serde(default = "default_turso")]
+    pub turso: TursoConfig,
     pub github: Option<GithubConfig>,
     pub socket_path: Option<String>,
     pub power: Option<PowerConfig>,
