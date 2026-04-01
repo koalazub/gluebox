@@ -241,6 +241,9 @@ pub struct StonkwatchSocialConfig {
     pub turso_auth_token: String,
     pub openrouter_api_key: Option<String>,
     pub post_interval_secs: Option<u64>,
+    #[serde(default)]
+    pub auto_post: bool,
+    pub review_room_id: Option<String>,
     pub x: Option<XConfig>,
     pub bluesky: Option<BlueskyConfig>,
     pub instagram: Option<InstagramConfig>,

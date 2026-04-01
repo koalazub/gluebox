@@ -34,6 +34,11 @@ impl StonkwatchSocialConnector {
 
     async fn run_posting_loop(config: StonkwatchSocialConfig) {
         let interval_secs = config.post_interval_secs.unwrap_or(14400);
+        let (approve_tx, mut approve_rx) = tokio::sync::mpsc::channel::<String>(32);
+
+        if let Some(ref room_id) = config.review_room_id {
+            info!(room_id, "Review mode enabled — posts will be sent to Matrix for approval");
+        }
 
         loop {
             info!("Stonkwatch social: checking for content to post");
@@ -43,12 +48,25 @@ impl StonkwatchSocialConnector {
                     let to_post: Vec<_> = candidates.into_iter().take(5).collect();
                     if to_post.is_empty() {
                         info!("No notable events to post about");
-                    } else {
-                        info!("Posting {} updates across platforms", to_post.len());
+                    } else if config.auto_post {
+                        info!("Auto-posting {} updates across platforms", to_post.len());
                         for post in &to_post {
                             Self::post_to_all_platforms(&config, post).await;
                             tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                         }
+                    } else if config.review_room_id.is_some() {
+                        info!("Sending {} posts to Matrix for review", to_post.len());
+                        for (i, post) in to_post.iter().enumerate() {
+                            let preview = format!(
+                                "📋 **Post {}/{}**\n\n{}\n\n_React ✅ to approve, ❌ to reject_",
+                                i + 1,
+                                to_post.len(),
+                                post.text
+                            );
+                            Self::send_to_review(&config, &preview).await;
+                        }
+                    } else {
+                        info!("auto_post=false and no review_room_id — {} posts generated but not sent", to_post.len());
                     }
                 }
                 Err(e) => {
@@ -57,6 +75,36 @@ impl StonkwatchSocialConnector {
             }
 
             tokio::time::sleep(std::time::Duration::from_secs(interval_secs)).await;
+        }
+    }
+
+    async fn send_to_review(config: &StonkwatchSocialConfig, message: &str) {
+        let notify_url = std::env::var("GLUEBOX_URL")
+            .or_else(|_| std::env::var("GLUEBOX_NOTIFY_URL"))
+            .unwrap_or_else(|_| "http://127.0.0.1:8990".to_string());
+
+        let notify_secret = std::env::var("GLUEBOX_NOTIFY_SECRET").unwrap_or_default();
+
+        let room_id = match &config.review_room_id {
+            Some(id) => id.clone(),
+            None => return,
+        };
+
+        let client = reqwest::Client::new();
+        let body = serde_json::json!({
+            "room_id": room_id,
+            "message": message,
+        });
+
+        match client
+            .post(format!("{}/api/notify", notify_url))
+            .header("Authorization", format!("Bearer {}", notify_secret))
+            .json(&body)
+            .send()
+            .await
+        {
+            Ok(_) => info!("Sent post to Matrix for review"),
+            Err(e) => warn!(error = %e, "Failed to send post to Matrix for review"),
         }
     }
 
