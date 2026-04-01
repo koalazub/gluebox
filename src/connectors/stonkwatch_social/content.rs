@@ -49,9 +49,8 @@ struct AnnouncementData {
     symbol: String,
     title: String,
     ann_type: String,
-    is_price_sensitive: bool,
+    importance: String,
     summary: Option<String>,
-    sentiment: Option<String>,
 }
 
 pub async fn fetch_post_candidates(config: &StonkwatchSocialConfig) -> Result<Vec<PostCandidate>> {
@@ -69,12 +68,12 @@ pub async fn fetch_post_candidates(config: &StonkwatchSocialConfig) -> Result<Ve
 
     let mut rows = match conn
         .query(
-            "SELECT ca.id, ca.symbol, ca.title, ca.announcement_type, ca.is_price_sensitive,
-                    ai.summary_text, ai.sentiment, ai.financial_impact
+            "SELECT ca.id, ca.symbol, ca.title, ca.announcement_type, ca.importance,
+                    ai.summary_text
              FROM company_announcements ca
              LEFT JOIN ai_summaries ai ON ca.id = ai.announcement_id
              WHERE ca.published_at >= ?1
-             ORDER BY ca.is_price_sensitive DESC, ca.published_at DESC
+             ORDER BY ca.importance DESC, ca.published_at DESC
              LIMIT 20",
             (cutoff,),
         )
@@ -96,9 +95,8 @@ pub async fn fetch_post_candidates(config: &StonkwatchSocialConfig) -> Result<Ve
             symbol: row.get_value(1).ok().and_then(|v| v.as_text().map(|s| s.to_string())).unwrap_or_default(),
             title: row.get_value(2).ok().and_then(|v| v.as_text().map(|s| s.to_string())).unwrap_or_default(),
             ann_type: row.get_value(3).ok().and_then(|v| v.as_text().map(|s| s.to_string())).unwrap_or_default(),
-            is_price_sensitive: row.get_value(4).ok().and_then(|v| v.as_integer().copied()).unwrap_or(0) == 1,
+            importance: row.get_value(4).ok().and_then(|v| v.as_text().map(|s| s.to_string())).unwrap_or_default(),
             summary: row.get_value(5).ok().and_then(|v| v.as_text().map(|s| s.to_string())),
-            sentiment: row.get_value(6).ok().and_then(|v| v.as_text().map(|s| s.to_string())),
         });
     }
 
@@ -112,7 +110,8 @@ pub async fn fetch_post_candidates(config: &StonkwatchSocialConfig) -> Result<Ve
     let mut candidates = Vec::new();
 
     for ann in &announcements {
-        let priority = if ann.is_price_sensitive { 2.0 } else { 1.0 };
+        let is_price_sensitive = ann.ann_type == "price_sensitive" || ann.importance == "high";
+        let priority = if is_price_sensitive { 2.0 } else { 1.0 };
         let link = format!("{}/announcement/{}?utm_source=social&utm_medium=bot", APP_URL, ann.id);
 
         let text = if let Some(ref client) = llm {
@@ -131,8 +130,8 @@ pub async fn fetch_post_candidates(config: &StonkwatchSocialConfig) -> Result<Ve
             symbol: ann.symbol.clone(),
             title: ann.title.clone(),
             ann_type: ann.ann_type.clone(),
-            is_price_sensitive: ann.is_price_sensitive,
-            sentiment: ann.sentiment.clone().unwrap_or_default(),
+            is_price_sensitive,
+            sentiment: String::new(),
             summary: ann.summary.clone().unwrap_or_default(),
             announcement_id: ann.id.clone(),
         };
@@ -164,18 +163,16 @@ pub async fn fetch_post_candidates(config: &StonkwatchSocialConfig) -> Result<Ve
 }
 
 async fn generate_post(client: &OpenCodeClient, ann: &AnnouncementData, link: &str) -> Result<String> {
+    let is_price_sensitive = ann.ann_type == "price_sensitive" || ann.importance == "high";
     let mut context = format!(
-        "Stock: ${}\nAnnouncement type: {}\nTitle: {}\nPrice sensitive: {}\nLink: {}",
-        ann.symbol, ann.ann_type, ann.title,
-        if ann.is_price_sensitive { "YES" } else { "no" },
+        "Stock: ${}\nAnnouncement type: {}\nTitle: {}\nImportance: {}\nPrice sensitive: {}\nLink: {}",
+        ann.symbol, ann.ann_type, ann.title, ann.importance,
+        if is_price_sensitive { "YES" } else { "no" },
         link,
     );
 
     if let Some(ref summary) = ann.summary {
         context.push_str(&format!("\nAI Summary: {}", summary));
-    }
-    if let Some(ref sentiment) = ann.sentiment {
-        context.push_str(&format!("\nSentiment: {}", sentiment));
     }
 
     let user_prompt = format!(
@@ -199,12 +196,8 @@ async fn generate_post(client: &OpenCodeClient, ann: &AnnouncementData, link: &s
 }
 
 fn fallback_post(ann: &AnnouncementData, link: &str) -> String {
-    let sensitivity = if ann.is_price_sensitive { " ⚡" } else { "" };
-    let sentiment_emoji = match ann.sentiment.as_deref() {
-        Some(s) if s.contains("positive") => "📈",
-        Some(s) if s.contains("negative") => "📉",
-        _ => "📊",
-    };
+    let is_price_sensitive = ann.ann_type == "price_sensitive" || ann.importance == "high";
+    let sensitivity = if is_price_sensitive { " ⚡" } else { "" };
 
     let title_truncated = if ann.title.len() > 100 {
         format!("{}...", &ann.title[..97])
@@ -222,8 +215,8 @@ fn fallback_post(ann: &AnnouncementData, link: &str) -> String {
         };
 
         let with_summary = format!(
-            "{}\n\n{}\n\n{} {}\n\n{}",
-            header, title_truncated, sentiment_emoji, summary_short, link
+            "{}\n\n{}\n\n{}\n\n{}",
+            header, title_truncated, summary_short, link
         );
 
         if with_summary.len() <= 300 {
