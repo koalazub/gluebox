@@ -36,6 +36,9 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/import/{session_id}", post(import_by_id))
         .route("/api/study-plan", post(create_study_plan))
         .route("/api/doc", post(create_doc))
+        .route("/api/social/generate", post(generate_social_post))
+        .route("/api/social/post", post(publish_social_post))
+        .route("/api/social/post-all", post(generate_and_post_all))
         .with_state(state)
 }
 
@@ -718,4 +721,136 @@ async fn create_study_plan(
             Ok(Json(serde_json::json!({"error": e.to_string()})))
         }
     }
+}
+
+#[derive(Deserialize)]
+struct SocialPostRequest {
+    text: Option<String>,
+    symbol: Option<String>,
+    platforms: Option<Vec<String>>,
+}
+
+async fn generate_social_post(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(req): Json<SocialPostRequest>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    check_admin_auth(&state, &headers).await?;
+
+    let config = state.config.read().await;
+    let social_cfg = config.stonkwatch_social.as_ref().ok_or(StatusCode::NOT_FOUND)?;
+
+    let candidates = crate::connectors::stonkwatch_social::content::fetch_post_candidates(social_cfg)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to fetch candidates: {e}");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    let filtered: Vec<_> = if let Some(ref sym) = req.symbol {
+        candidates.into_iter().filter(|c| c.text.contains(sym)).collect()
+    } else {
+        candidates
+    };
+
+    let posts: Vec<_> = filtered.iter().take(5).map(|c| &c.text).collect();
+    Ok(Json(serde_json::json!({"posts": posts, "count": posts.len()})))
+}
+
+async fn publish_social_post(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(req): Json<SocialPostRequest>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    check_admin_auth(&state, &headers).await?;
+
+    let text = req.text.ok_or(StatusCode::BAD_REQUEST)?;
+    let config = state.config.read().await;
+    let social_cfg = config.stonkwatch_social.as_ref().ok_or(StatusCode::NOT_FOUND)?;
+
+    let platforms = req.platforms.unwrap_or_else(|| vec!["x".into(), "bluesky".into()]);
+    let mut results = serde_json::Map::new();
+
+    for platform in &platforms {
+        match platform.as_str() {
+            "x" => {
+                if let Some(ref x_cfg) = social_cfg.x {
+                    match crate::connectors::stonkwatch_social::x::post_tweet(x_cfg, &text).await {
+                        Ok(id) => { results.insert("x".into(), serde_json::json!({"ok": true, "id": id})); }
+                        Err(e) => { results.insert("x".into(), serde_json::json!({"ok": false, "error": e.to_string()})); }
+                    }
+                }
+            }
+            "bluesky" => {
+                if let Some(ref bsky_cfg) = social_cfg.bluesky {
+                    match crate::connectors::stonkwatch_social::bluesky::post(bsky_cfg, &text).await {
+                        Ok(uri) => { results.insert("bluesky".into(), serde_json::json!({"ok": true, "uri": uri})); }
+                        Err(e) => { results.insert("bluesky".into(), serde_json::json!({"ok": false, "error": e.to_string()})); }
+                    }
+                }
+            }
+            "instagram" => {
+                if let Some(ref ig_cfg) = social_cfg.instagram {
+                    match crate::connectors::stonkwatch_social::instagram::post(ig_cfg, &text, None).await {
+                        Ok(id) => { results.insert("instagram".into(), serde_json::json!({"ok": true, "id": id})); }
+                        Err(e) => { results.insert("instagram".into(), serde_json::json!({"ok": false, "error": e.to_string()})); }
+                    }
+                }
+            }
+            "facebook" => {
+                if let Some(ref fb_cfg) = social_cfg.facebook {
+                    match crate::connectors::stonkwatch_social::facebook::post(fb_cfg, &text).await {
+                        Ok(id) => { results.insert("facebook".into(), serde_json::json!({"ok": true, "id": id})); }
+                        Err(e) => { results.insert("facebook".into(), serde_json::json!({"ok": false, "error": e.to_string()})); }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    Ok(Json(serde_json::json!({"results": results})))
+}
+
+async fn generate_and_post_all(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    check_admin_auth(&state, &headers).await?;
+
+    let config = state.config.read().await;
+    let social_cfg = config.stonkwatch_social.as_ref().ok_or(StatusCode::NOT_FOUND)?;
+
+    let candidates = crate::connectors::stonkwatch_social::content::fetch_post_candidates(social_cfg)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to fetch candidates: {e}");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    let to_post: Vec<_> = candidates.into_iter().take(5).collect();
+    let mut posted = Vec::new();
+
+    for post in &to_post {
+        let mut result = serde_json::Map::new();
+        result.insert("text".into(), serde_json::json!(post.text));
+
+        if let Some(ref x_cfg) = social_cfg.x {
+            match crate::connectors::stonkwatch_social::x::post_tweet(x_cfg, &post.text).await {
+                Ok(id) => { result.insert("x".into(), serde_json::json!(id)); }
+                Err(e) => { result.insert("x_error".into(), serde_json::json!(e.to_string())); }
+            }
+        }
+        if let Some(ref bsky_cfg) = social_cfg.bluesky {
+            match crate::connectors::stonkwatch_social::bluesky::post(bsky_cfg, &post.text).await {
+                Ok(uri) => { result.insert("bluesky".into(), serde_json::json!(uri)); }
+                Err(e) => { result.insert("bluesky_error".into(), serde_json::json!(e.to_string())); }
+            }
+        }
+
+        posted.push(serde_json::Value::Object(result));
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+    }
+
+    Ok(Json(serde_json::json!({"posted": posted, "count": posted.len()})))
 }

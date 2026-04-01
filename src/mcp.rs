@@ -12,6 +12,20 @@ struct ImportSessionInput {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct SocialPostInput {
+    /// The post text to publish
+    text: String,
+    /// Platforms to post to: "x", "bluesky", "instagram", "facebook". Defaults to all configured.
+    platforms: Option<Vec<String>>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct GenerateSocialInput {
+    /// Optional: filter by stock symbol (e.g. "BHP")
+    symbol: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 struct StudyPlanInput {
     period: String,
     course: Option<String>,
@@ -214,6 +228,68 @@ impl GlueboxMcp {
         Ok(CallToolResult::success(vec![Content::text(body)]))
     }
 
+    #[tool(description = "Generate social media posts from recent ASX announcements. Uses AI to create engaging, platform-aware content. Optionally filter by stock symbol.")]
+    async fn generate_social_posts(
+        &self,
+        Parameters(input): Parameters<GenerateSocialInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let mut url = format!("{}/api/social/generate", self.base_url);
+        let body = serde_json::json!({ "symbol": input.symbol });
+        let resp = self
+            .client
+            .post(&url)
+            .header("Authorization", self.auth_header())
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        let text = resp
+            .text()
+            .await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![Content::text(text)]))
+    }
+
+    #[tool(description = "Publish a social media post to X, Bluesky, Instagram, and/or Facebook. Provide the post text and optionally specify which platforms.")]
+    async fn publish_social_post(
+        &self,
+        Parameters(input): Parameters<SocialPostInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let body = serde_json::json!({
+            "text": input.text,
+            "platforms": input.platforms,
+        });
+        let resp = self
+            .client
+            .post(format!("{}/api/social/post", self.base_url))
+            .header("Authorization", self.auth_header())
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        let text = resp
+            .text()
+            .await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![Content::text(text)]))
+    }
+
+    #[tool(description = "Generate AI-powered social posts from recent ASX announcements and publish them to all configured platforms (X, Bluesky). One-shot: fetches data, generates content, posts.")]
+    async fn generate_and_post_all(&self) -> Result<CallToolResult, McpError> {
+        let resp = self
+            .client
+            .post(format!("{}/api/social/post-all", self.base_url))
+            .header("Authorization", self.auth_header())
+            .send()
+            .await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        let text = resp
+            .text()
+            .await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![Content::text(text)]))
+    }
+
     #[tool(description = "Hot-reload daemon configuration")]
     async fn reload_config(&self) -> Result<CallToolResult, McpError> {
         let resp = self
@@ -237,7 +313,7 @@ impl ServerHandler for GlueboxMcp {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("gluebox", env!("CARGO_PKG_VERSION")))
             .with_instructions(
-                "Gluebox daemon proxy. Manage lecture sessions, study plans, and connectors."
+                "Gluebox daemon proxy. Manage lecture sessions, study plans, connectors, and Stonkwatch social media posting (X, Bluesky, Instagram, Facebook)."
                     .to_string(),
             )
     }
