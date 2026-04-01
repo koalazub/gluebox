@@ -10,8 +10,25 @@ fn default_hyprnote_dir() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
     PathBuf::from(home).join("Library/Application Support/hyprnote")
 }
-fn default_debounce_secs() -> u64 { 30 }
-fn default_uni_calendar_names() -> Vec<String> { vec!["Uni".into()] }
+fn default_debounce_secs() -> u64 {
+    30
+}
+fn default_uni_calendar_names() -> Vec<String> {
+    vec!["Uni".into()]
+}
+fn default_turso() -> TursoConfig {
+    // Default to local embedded replica for resilience:
+    // - Local-first operation (fast, works offline)
+    // - Concurrency via libsql's embedded replica architecture
+    // - Easy migration path: set url/auth_token later to sync to remote Turso
+    TursoConfig {
+        url: String::new(),
+        auth_token: String::new(),
+        replica_path: Some(PathBuf::from("/var/lib/gluebox/turso")),
+        sync_interval_secs: Some(60),
+        encryption_key: None,
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Config {

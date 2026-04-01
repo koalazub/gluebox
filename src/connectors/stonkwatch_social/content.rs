@@ -106,7 +106,7 @@ pub async fn fetch_post_candidates(config: &StonkwatchSocialConfig) -> Result<Ve
 
     for ann in &announcements {
         let priority = if ann.is_price_sensitive { 2.0 } else { 1.0 };
-        let link = format!("{}/announcement/{}", APP_URL, ann.id);
+        let link = format!("{}/announcement/{}?utm_source=social&utm_medium=bot", APP_URL, ann.id);
 
         let text = if let Some(ref client) = llm {
             match generate_post(client, ann, &link).await {

@@ -51,7 +51,10 @@ async fn main() -> anyhow::Result<()> {
     match cli.command {
         None => {
             let cfg = config::Config::load()?;
-            let db = Arc::new(db::Db::open(&cfg.turso).await?);
+            let db = match cfg.turso {
+                Some(ref turso) => Some(Arc::new(db::Db::open(turso).await?)),
+                None => None,
+            };
 
             let listen_addr = cfg.listen_addr.clone();
             let registry = Arc::new(registry::ConnectorRegistry::new());
