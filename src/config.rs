@@ -246,8 +246,7 @@ pub struct StonkwatchSocialConfig {
     pub review_room_id: Option<String>,
     pub x: Option<XConfig>,
     pub bluesky: Option<BlueskyConfig>,
-    pub instagram: Option<InstagramConfig>,
-    pub facebook: Option<FacebookConfig>,
+    pub meta: Option<MetaConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -271,14 +270,17 @@ fn default_bluesky_service_url() -> String {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct InstagramConfig {
-    pub access_token: String,
-    pub ig_user_id: String,
-    pub default_image_url: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct FacebookConfig {
+pub struct MetaConfig {
     pub page_access_token: String,
     pub page_id: String,
+    pub ig_user_id: Option<String>,
+    pub threads_user_id: Option<String>,
+    #[serde(default = "default_true")]
+    pub facebook_enabled: bool,
+    #[serde(default = "default_true")]
+    pub instagram_enabled: bool,
+    #[serde(default = "default_true")]
+    pub threads_enabled: bool,
 }
+
+fn default_true() -> bool { true }

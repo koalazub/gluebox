@@ -798,19 +798,17 @@ async fn publish_social_post(
                     }
                 }
             }
-            "instagram" => {
-                if let Some(ref ig_cfg) = social_cfg.instagram {
-                    match crate::connectors::stonkwatch_social::instagram::post(ig_cfg, &text, None).await {
-                        Ok(id) => { results.insert("instagram".into(), serde_json::json!({"ok": true, "id": id})); }
-                        Err(e) => { results.insert("instagram".into(), serde_json::json!({"ok": false, "error": e.to_string()})); }
-                    }
-                }
-            }
-            "facebook" => {
-                if let Some(ref fb_cfg) = social_cfg.facebook {
-                    match crate::connectors::stonkwatch_social::facebook::post(fb_cfg, &text).await {
-                        Ok(id) => { results.insert("facebook".into(), serde_json::json!({"ok": true, "id": id})); }
-                        Err(e) => { results.insert("facebook".into(), serde_json::json!({"ok": false, "error": e.to_string()})); }
+            "facebook" | "instagram" | "threads" => {
+                if let Some(ref meta_cfg) = social_cfg.meta {
+                    let result = match platform.as_str() {
+                        "facebook" => crate::connectors::stonkwatch_social::meta::post_to_facebook(meta_cfg, &text).await,
+                        "instagram" => crate::connectors::stonkwatch_social::meta::post_to_instagram(meta_cfg, &text, "").await,
+                        "threads" => crate::connectors::stonkwatch_social::meta::post_to_threads(meta_cfg, &text).await,
+                        _ => unreachable!(),
+                    };
+                    match result {
+                        Ok(id) => { results.insert(platform.clone(), serde_json::json!({"ok": true, "id": id})); }
+                        Err(e) => { results.insert(platform.clone(), serde_json::json!({"ok": false, "error": e.to_string()})); }
                     }
                 }
             }
@@ -864,6 +862,14 @@ async fn generate_and_post_all(
             match crate::connectors::stonkwatch_social::bluesky::post_with_session(bsky_cfg, &post.text, &mut bsky_session).await {
                 Ok(uri) => { result.insert("bluesky".into(), serde_json::json!(uri)); }
                 Err(e) => { result.insert("bluesky_error".into(), serde_json::json!(e.to_string())); }
+            }
+        }
+        if let Some(ref meta_cfg) = social_cfg.meta {
+            for (platform, res) in crate::connectors::stonkwatch_social::meta::post_all(meta_cfg, &post.text, post.image_url.as_deref()).await {
+                match res {
+                    Ok(id) => { result.insert(platform.into(), serde_json::json!(id)); }
+                    Err(e) => { result.insert(format!("{}_error", platform), serde_json::json!(e.to_string())); }
+                }
             }
         }
 

@@ -2,8 +2,7 @@ pub mod content;
 pub mod og_image;
 pub mod x;
 pub mod bluesky;
-pub mod instagram;
-pub mod facebook;
+pub mod meta;
 
 use std::any::Any;
 use std::collections::HashSet;
@@ -120,15 +119,12 @@ impl StonkwatchSocialConnector {
         } else {
             warn!(platform = "bluesky", "Not configured — posts will be skipped");
         }
-        if config.instagram.is_some() {
-            info!(platform = "instagram", "Configured");
+        if let Some(ref meta) = config.meta {
+            if meta.facebook_enabled { info!(platform = "facebook", "Configured via Meta"); }
+            if meta.instagram_enabled && meta.ig_user_id.is_some() { info!(platform = "instagram", "Configured via Meta"); }
+            if meta.threads_enabled && meta.threads_user_id.is_some() { info!(platform = "threads", "Configured via Meta"); }
         } else {
-            warn!(platform = "instagram", "Not configured — posts will be skipped");
-        }
-        if config.facebook.is_some() {
-            info!(platform = "facebook", "Configured");
-        } else {
-            warn!(platform = "facebook", "Not configured — posts will be skipped");
+            warn!(platform = "meta", "Not configured — Facebook/Instagram/Threads will be skipped");
         }
         if config.auto_post {
             info!("Auto-post enabled");
@@ -188,17 +184,12 @@ impl StonkwatchSocialConnector {
             }
         }
 
-        if let Some(ref ig_cfg) = config.instagram {
-            match instagram::post(ig_cfg, &post.text, post.image_url.as_deref()).await {
-                Ok(id) => info!(platform = "instagram", post_id = %id, "Posted"),
-                Err(e) => error!(platform = "instagram", error = %e, "Failed to post"),
-            }
-        }
-
-        if let Some(ref fb_cfg) = config.facebook {
-            match facebook::post(fb_cfg, &post.text).await {
-                Ok(id) => info!(platform = "facebook", post_id = %id, "Posted"),
-                Err(e) => error!(platform = "facebook", error = %e, "Failed to post"),
+        if let Some(ref meta_cfg) = config.meta {
+            for (platform, result) in meta::post_all(meta_cfg, &post.text, post.image_url.as_deref()).await {
+                match result {
+                    Ok(id) => info!(%platform, post_id = %id, "Posted"),
+                    Err(e) => error!(%platform, error = %e, "Failed to post"),
+                }
             }
         }
     }
