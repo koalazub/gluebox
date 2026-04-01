@@ -120,10 +120,33 @@ pub async fn fetch_post_candidates(config: &StonkwatchSocialConfig) -> Result<Ve
             fallback_post(ann, &link)
         };
 
+        let og_data = super::og_image::OgCardData {
+            symbol: ann.symbol.clone(),
+            title: ann.title.clone(),
+            ann_type: ann.ann_type.clone(),
+            is_price_sensitive: ann.is_price_sensitive,
+            sentiment: ann.sentiment.clone().unwrap_or_default(),
+            summary: ann.summary.clone().unwrap_or_default(),
+            announcement_id: ann.id.clone(),
+        };
+
+        let image_path = match super::og_image::generate_og_image(
+            &og_data,
+            std::path::Path::new("/var/lib/gluebox/og-images"),
+        )
+        .await
+        {
+            Ok(path) => Some(path.display().to_string()),
+            Err(e) => {
+                warn!(symbol = ann.symbol, error = %e, "OG image generation failed");
+                None
+            }
+        };
+
         candidates.push(PostCandidate {
             text,
             priority,
-            image_url: None,
+            image_url: image_path,
         });
     }
 

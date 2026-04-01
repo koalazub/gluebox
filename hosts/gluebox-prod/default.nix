@@ -170,7 +170,11 @@ in
     environment = {
       GLUEBOX_CONFIG = "/etc/gluebox/gluebox.toml";
       RUST_LOG = "gluebox=info";
+      PATH = "${pkgs.typst}/bin:${pkgs.coreutils}/bin";
     };
+    preStart = ''
+      mkdir -p /var/lib/gluebox/og-images
+    '';
   };
 
   networking.firewall = {
@@ -179,11 +183,14 @@ in
     trustedInterfaces = [ "tailscale0" ];
   };
 
+  environment.etc."gluebox/og-card.typ".source = ../../assets/og-card.typ;
+
   environment.systemPackages = with pkgs; [
     curl
     htop
     mongosh
     tailscale
+    typst
   ];
 
   swapDevices = [{
