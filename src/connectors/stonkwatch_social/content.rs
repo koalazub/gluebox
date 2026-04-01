@@ -56,12 +56,14 @@ struct AnnouncementData {
 
 pub async fn fetch_post_candidates(config: &StonkwatchSocialConfig) -> Result<Vec<PostCandidate>> {
     info!(url = %config.turso_url, "Connecting to Stonkwatch Turso DB");
-    let db = libsql::Builder::new_remote(config.turso_url.clone(), config.turso_auth_token.clone())
+    let db = turso::sync::Builder::new_remote("/var/lib/gluebox/stonkwatch-replica")
+        .with_remote_url(&config.turso_url)
+        .with_auth_token(&config.turso_auth_token)
         .build()
         .await
         .with_context(|| format!("Failed to connect to Stonkwatch Turso DB at {}", config.turso_url))?;
 
-    let conn = db.connect().context("Failed to get Turso connection")?;
+    let conn = db.connect().await.context("Failed to get Turso connection")?;
 
     let cutoff = (chrono::Utc::now() - chrono::Duration::hours(6)).timestamp();
 
@@ -74,7 +76,7 @@ pub async fn fetch_post_candidates(config: &StonkwatchSocialConfig) -> Result<Ve
              WHERE ca.published_at >= ?1
              ORDER BY ca.is_price_sensitive DESC, ca.published_at DESC
              LIMIT 20",
-            libsql::params![cutoff],
+            (cutoff,),
         )
         .await {
         Ok(r) => r,
@@ -86,15 +88,17 @@ pub async fn fetch_post_candidates(config: &StonkwatchSocialConfig) -> Result<Ve
 
     let mut announcements = Vec::new();
 
-    while let Some(row) = rows.next().await? {
+    while let Some(row) = rows.next().await
+        .context("Failed to iterate announcement rows")?
+    {
         announcements.push(AnnouncementData {
-            id: row.get::<String>(0).unwrap_or_default(),
-            symbol: row.get::<String>(1).unwrap_or_default(),
-            title: row.get::<String>(2).unwrap_or_default(),
-            ann_type: row.get::<String>(3).unwrap_or_default(),
-            is_price_sensitive: row.get::<i64>(4).unwrap_or(0) == 1,
-            summary: row.get::<String>(5).ok(),
-            sentiment: row.get::<String>(6).ok(),
+            id: row.get_value(0).ok().and_then(|v| v.as_text().map(|s| s.to_string())).unwrap_or_default(),
+            symbol: row.get_value(1).ok().and_then(|v| v.as_text().map(|s| s.to_string())).unwrap_or_default(),
+            title: row.get_value(2).ok().and_then(|v| v.as_text().map(|s| s.to_string())).unwrap_or_default(),
+            ann_type: row.get_value(3).ok().and_then(|v| v.as_text().map(|s| s.to_string())).unwrap_or_default(),
+            is_price_sensitive: row.get_value(4).ok().and_then(|v| v.as_integer().copied()).unwrap_or(0) == 1,
+            summary: row.get_value(5).ok().and_then(|v| v.as_text().map(|s| s.to_string())),
+            sentiment: row.get_value(6).ok().and_then(|v| v.as_text().map(|s| s.to_string())),
         });
     }
 
