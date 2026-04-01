@@ -34,7 +34,6 @@ impl StonkwatchSocialConnector {
 
     async fn run_posting_loop(config: StonkwatchSocialConfig) {
         let interval_secs = config.post_interval_secs.unwrap_or(14400);
-        let (approve_tx, mut approve_rx) = tokio::sync::mpsc::channel::<String>(32);
 
         if let Some(ref room_id) = config.review_room_id {
             info!(room_id, "Review mode enabled — posts will be sent to Matrix for approval");

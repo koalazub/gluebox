@@ -7,7 +7,6 @@ edition = "2024"
 axum = { version = "0.8", features = ["macros"] }
 tokio = { version = "1", features = ["full"] }
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
-libsql = { version = "0.6", features = ["remote", "replication"] }
 turso = { git = "https://github.com/tursodatabase/turso", tag = "v0.5.0", features = ["sync"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -39,6 +38,9 @@ rmcp = { version = "1.1", features = ["server", "transport-io"] }
 
 [build-dependencies]
 capnpc = "0.20"
+
+[patch.crates-io]
+matrix-sdk = { path = "patches/matrix-sdk" }
 
 [profile.release]
 strip = true

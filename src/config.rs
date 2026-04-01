@@ -19,7 +19,7 @@ fn default_uni_calendar_names() -> Vec<String> {
 fn default_turso() -> TursoConfig {
     // Default to local embedded replica for resilience:
     // - Local-first operation (fast, works offline)
-    // - Concurrency via libsql's embedded replica architecture
+    // - Concurrency via turso's embedded replica architecture
     // - Easy migration path: set url/auth_token later to sync to remote Turso
     TursoConfig {
         url: String::new(),

@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use std::path::Path;
-use tracing::{info, warn};
+use tracing::info;
 
 pub struct OgCardData {
     pub symbol: String,

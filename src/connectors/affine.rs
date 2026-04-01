@@ -211,9 +211,6 @@ impl AffineConnector {
             })
     }
 
-    pub async fn workspace_names(&self) -> Vec<String> {
-        self.clients.lock().await.keys().cloned().collect()
-    }
 }
 
 fn build_client(cfg: &crate::config::AffineConfig) -> AffineClient {

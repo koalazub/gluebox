@@ -13,7 +13,6 @@ pub struct SessionMeta {
 pub struct ParsedSession {
     pub meta: SessionMeta,
     pub summary: Option<String>,
-    pub dir: PathBuf,
 }
 
 pub fn list_session_dirs(sessions_dir: &Path) -> Vec<PathBuf> {
@@ -48,7 +47,6 @@ pub fn parse_session(dir: &Path) -> anyhow::Result<ParsedSession> {
     Ok(ParsedSession {
         meta,
         summary,
-        dir: dir.to_path_buf(),
     })
 }
 

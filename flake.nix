@@ -54,7 +54,7 @@
                 baseName == "cliff.toml" ||
                 baseName == ".gitignore" ||
                 baseName == "result"
-              ) || (builtins.match ".*\\.capnp$" path != null) || craneLib.filterCargoSources path type;
+              ) || (builtins.match ".*\\.capnp$" path != null) || (builtins.match ".*/patches/.*" path != null) || craneLib.filterCargoSources path type;
           };
 
           commonArgs = {

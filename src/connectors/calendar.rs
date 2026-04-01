@@ -8,9 +8,12 @@ use super::char_sessions::SessionMeta;
 #[derive(Debug, Clone, Deserialize)]
 pub struct CharCalendar {
     pub name: String,
-    pub enabled: bool,
-    pub provider: String,
-    pub source: String,
+    #[allow(dead_code)]
+    enabled: bool,
+    #[allow(dead_code)]
+    provider: String,
+    #[allow(dead_code)]
+    source: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -20,14 +23,15 @@ pub struct CharEvent {
     pub started_at: DateTime<Utc>,
     pub ended_at: DateTime<Utc>,
     #[serde(default)]
-    pub description: String,
+    #[allow(dead_code)]
+    description: String,
     #[serde(default)]
-    pub location: String,
+    #[allow(dead_code)]
+    location: String,
 }
 
 #[derive(Debug, Clone)]
 pub struct MatchedEvent {
-    pub event_id: String,
     pub event_title: String,
     pub calendar_name: String,
 }
@@ -95,14 +99,13 @@ pub fn match_session_to_event(
         }
     }
 
-    best.map(|(event_id, event, _)| {
+    best.map(|(_, event, _)| {
         let calendar_name = calendars
             .get(&event.calendar_id)
             .map(|c| c.name.clone())
             .unwrap_or_default();
 
         MatchedEvent {
-            event_id,
             event_title: event.title.clone(),
             calendar_name,
         }
