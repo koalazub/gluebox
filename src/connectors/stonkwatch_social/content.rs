@@ -56,16 +56,17 @@ struct AnnouncementData {
 
 pub async fn fetch_post_candidates(config: &StonkwatchSocialConfig) -> Result<Vec<PostCandidate>> {
     let url = config.turso_url.replace("libsql://", "https://");
-    let db = libsql::Builder::new_remote(url, config.turso_auth_token.clone())
+    info!(url = %url, "Connecting to Stonkwatch Turso DB");
+    let db = libsql::Builder::new_remote(url.clone(), config.turso_auth_token.clone())
         .build()
         .await
-        .context("Failed to connect to Stonkwatch Turso DB")?;
+        .with_context(|| format!("Failed to connect to Stonkwatch Turso DB at {}", url))?;
 
-    let conn = db.connect().context("Failed to get connection")?;
+    let conn = db.connect().context("Failed to get Turso connection")?;
 
     let cutoff = (chrono::Utc::now() - chrono::Duration::hours(6)).timestamp();
 
-    let mut rows = conn
+    let mut rows = match conn
         .query(
             "SELECT ca.id, ca.symbol, ca.title, ca.announcement_type, ca.is_price_sensitive,
                     ai.summary_text, ai.sentiment, ai.financial_impact
@@ -76,8 +77,13 @@ pub async fn fetch_post_candidates(config: &StonkwatchSocialConfig) -> Result<Ve
              LIMIT 20",
             libsql::params![cutoff],
         )
-        .await
-        .context("Failed to query announcements")?;
+        .await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!(error = %e, url = %config.turso_url, "Turso query failed");
+            anyhow::bail!("Failed to query announcements: {}", e);
+        }
+    };
 
     let mut announcements = Vec::new();
 
