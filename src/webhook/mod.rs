@@ -35,6 +35,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/import/all", post(import_all))
         .route("/api/import/{session_id}", post(import_by_id))
         .route("/api/study-plan", post(create_study_plan))
+        .route("/api/doc", post(create_doc))
         .with_state(state)
 }
 
@@ -673,6 +674,28 @@ async fn import_by_id(
             tracing::error!("import_by_id failed: {e}");
             Ok(Json(serde_json::json!({"error": e.to_string()})))
         }
+    }
+}
+
+#[derive(Deserialize)]
+struct CreateDocRequest {
+    title: String,
+    markdown: String,
+    workspace: Option<String>,
+}
+
+async fn create_doc(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(req): Json<CreateDocRequest>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    check_admin_auth(&state, &headers).await?;
+    match triggers::affine_workspace_from_registry(&state, req.workspace.as_deref()).await {
+        Ok(client) => match client.create_document(&req.title, &req.markdown).await {
+            Ok(doc_id) => Ok(Json(serde_json::json!({"doc_id": doc_id, "title": req.title, "workspace": req.workspace}))),
+            Err(e) => Ok(Json(serde_json::json!({"error": e.to_string()}))),
+        },
+        Err(e) => Ok(Json(serde_json::json!({"error": e.to_string()}))),
     }
 }
 

@@ -1,14 +1,40 @@
 use anyhow::{Context, Result};
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::config::StonkwatchSocialConfig;
+use crate::connectors::opencode::OpenCodeClient;
 
 const APP_URL: &str = "https://stonkwatch.app";
+
+const SYSTEM_PROMPT: &str = r#"You are the social media voice for Stonkwatch, an Australian ASX market intelligence platform. Your job is to write engaging social media posts about ASX stock announcements.
+
+Rules:
+- Write in a confident, knowledgeable Australian finance voice
+- Be terse and punchy — every word earns its place
+- Use $SYMBOL format for stock tickers
+- Include the stonkwatch.app link provided — always at the end
+- Never give financial advice or say "buy" / "sell"
+- No hashtags unless specifically for the stock ticker
+- Vary your tone: sometimes analytical, sometimes conversational, sometimes urgent for price-sensitive news
+- Max 280 characters for X/Twitter, 300 for Bluesky
+- If an AI summary is provided, distill the key insight — don't just repeat the title
+- For price-sensitive announcements, lead with the urgency
+- Australian English spelling"#;
 
 pub struct PostCandidate {
     pub text: String,
     pub priority: f64,
     pub image_url: Option<String>,
+}
+
+struct AnnouncementData {
+    id: String,
+    symbol: String,
+    title: String,
+    ann_type: String,
+    is_price_sensitive: bool,
+    summary: Option<String>,
+    sentiment: Option<String>,
 }
 
 pub async fn fetch_post_candidates(config: &StonkwatchSocialConfig) -> Result<Vec<PostCandidate>> {
@@ -38,28 +64,44 @@ pub async fn fetch_post_candidates(config: &StonkwatchSocialConfig) -> Result<Ve
         .await
         .context("Failed to query announcements")?;
 
-    let mut candidates = Vec::new();
+    let mut announcements = Vec::new();
 
     while let Some(row) = rows.next().await? {
-        let ann_id = row.get::<String>(0).unwrap_or_default();
-        let symbol = row.get::<String>(1).unwrap_or_default();
-        let title = row.get::<String>(2).unwrap_or_default();
-        let ann_type = row.get::<String>(3).unwrap_or_default();
-        let is_price_sensitive = row.get::<i64>(4).unwrap_or(0) == 1;
-        let summary: Option<String> = row.get::<String>(5).ok();
-        let sentiment: Option<String> = row.get::<String>(6).ok();
+        announcements.push(AnnouncementData {
+            id: row.get::<String>(0).unwrap_or_default(),
+            symbol: row.get::<String>(1).unwrap_or_default(),
+            title: row.get::<String>(2).unwrap_or_default(),
+            ann_type: row.get::<String>(3).unwrap_or_default(),
+            is_price_sensitive: row.get::<i64>(4).unwrap_or(0) == 1,
+            summary: row.get::<String>(5).ok(),
+            sentiment: row.get::<String>(6).ok(),
+        });
+    }
 
-        let priority = if is_price_sensitive { 2.0 } else { 1.0 };
+    if announcements.is_empty() {
+        info!("No announcements found in the last 6 hours");
+        return Ok(Vec::new());
+    }
 
-        let text = format_post(
-            &symbol,
-            &title,
-            &ann_type,
-            is_price_sensitive,
-            summary.as_deref(),
-            sentiment.as_deref(),
-            &ann_id,
-        );
+    let llm = config.openrouter_api_key.as_ref().map(|key| OpenCodeClient::new(key));
+
+    let mut candidates = Vec::new();
+
+    for ann in &announcements {
+        let priority = if ann.is_price_sensitive { 2.0 } else { 1.0 };
+        let link = format!("{}/announcement/{}", APP_URL, ann.id);
+
+        let text = if let Some(ref client) = llm {
+            match generate_post(client, ann, &link).await {
+                Ok(post) => post,
+                Err(e) => {
+                    warn!(symbol = ann.symbol, error = %e, "LLM post generation failed, using fallback");
+                    fallback_post(ann, &link)
+                }
+            }
+        } else {
+            fallback_post(ann, &link)
+        };
 
         candidates.push(PostCandidate {
             text,
@@ -70,41 +112,66 @@ pub async fn fetch_post_candidates(config: &StonkwatchSocialConfig) -> Result<Ve
 
     candidates.sort_by(|a, b| b.priority.partial_cmp(&a.priority).unwrap_or(std::cmp::Ordering::Equal));
 
-    info!(count = candidates.len(), "Fetched post candidates from Stonkwatch");
+    info!(count = candidates.len(), "Prepared post candidates");
     Ok(candidates)
 }
 
-fn format_post(
-    symbol: &str,
-    title: &str,
-    ann_type: &str,
-    is_price_sensitive: bool,
-    summary: Option<&str>,
-    sentiment: Option<&str>,
-    announcement_id: &str,
-) -> String {
-    let sensitivity = if is_price_sensitive { " ⚡" } else { "" };
-    let sentiment_emoji = match sentiment {
+async fn generate_post(client: &OpenCodeClient, ann: &AnnouncementData, link: &str) -> Result<String> {
+    let mut context = format!(
+        "Stock: ${}\nAnnouncement type: {}\nTitle: {}\nPrice sensitive: {}\nLink: {}",
+        ann.symbol, ann.ann_type, ann.title,
+        if ann.is_price_sensitive { "YES" } else { "no" },
+        link,
+    );
+
+    if let Some(ref summary) = ann.summary {
+        context.push_str(&format!("\nAI Summary: {}", summary));
+    }
+    if let Some(ref sentiment) = ann.sentiment {
+        context.push_str(&format!("\nSentiment: {}", sentiment));
+    }
+
+    let user_prompt = format!(
+        "{}\n\nWrite a single social media post (max 280 chars) for this announcement. Include the link at the end. Output ONLY the post text, nothing else.",
+        context
+    );
+
+    let response = client.chat(SYSTEM_PROMPT, &user_prompt, 200).await?;
+
+    let post = response.trim().trim_matches('"').to_string();
+
+    if post.len() > 300 {
+        anyhow::bail!("Generated post too long: {} chars", post.len());
+    }
+
+    if !post.contains(link) {
+        return Ok(format!("{}\n\n{}", post.trim(), link));
+    }
+
+    Ok(post)
+}
+
+fn fallback_post(ann: &AnnouncementData, link: &str) -> String {
+    let sensitivity = if ann.is_price_sensitive { " ⚡" } else { "" };
+    let sentiment_emoji = match ann.sentiment.as_deref() {
         Some(s) if s.contains("positive") => "📈",
         Some(s) if s.contains("negative") => "📉",
         _ => "📊",
     };
 
-    let link = format!("{}/announcement/{}", APP_URL, announcement_id);
-
-    let title_truncated = if title.len() > 100 {
-        format!("{}...", &title[..97])
+    let title_truncated = if ann.title.len() > 100 {
+        format!("{}...", &ann.title[..97])
     } else {
-        title.to_string()
+        ann.title.clone()
     };
 
-    let header = format!("${}{} — {}", symbol, sensitivity, ann_type);
+    let header = format!("${}{} — {}", ann.symbol, sensitivity, ann.ann_type);
 
-    if let Some(summary_text) = summary {
+    if let Some(ref summary_text) = ann.summary {
         let summary_short = if summary_text.len() > 120 {
             format!("{}...", &summary_text[..117])
         } else {
-            summary_text.to_string()
+            summary_text.clone()
         };
 
         let with_summary = format!(

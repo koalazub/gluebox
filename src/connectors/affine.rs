@@ -2,6 +2,8 @@ use reqwest::Client;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::any::Any;
+use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::pin::Pin;
 use std::future::Future;
@@ -14,6 +16,8 @@ pub struct AffineClient {
     api_url: String,
     token: String,
     workspace_id: String,
+    mcp_url: Option<String>,
+    output_dir: PathBuf,
 }
 
 #[derive(Debug, Deserialize)]
@@ -24,12 +28,20 @@ pub struct DocSummary {
 }
 
 impl AffineClient {
-    pub fn new(api_url: &str, token: &str, workspace_id: &str) -> Self {
+    pub fn new(
+        api_url: &str,
+        token: &str,
+        workspace_id: &str,
+        mcp_url: Option<String>,
+        output_dir: PathBuf,
+    ) -> Self {
         Self {
             client: Client::new(),
             api_url: api_url.trim_end_matches('/').to_string(),
             token: token.to_string(),
             workspace_id: workspace_id.to_string(),
+            mcp_url,
+            output_dir,
         }
     }
 
@@ -54,25 +66,93 @@ impl AffineClient {
         Ok(resp)
     }
 
+    /// Create a document in Affine. Tries the MCP endpoint first (supports
+    /// markdown import), then falls back to saving locally.
     pub async fn create_document(&self, title: &str, markdown: &str) -> anyhow::Result<String> {
-        let query = r#"
-            mutation($input: CreateDocInput!) {
-                createDoc(input: $input) { id }
+        match self.create_via_mcp(title, markdown).await {
+            Ok(doc_id) => Ok(doc_id),
+            Err(e) => {
+                tracing::warn!("affine MCP create failed ({e}), falling back to local file");
+                self.save_local(title, markdown).await
             }
-        "#;
-        let vars = json!({
-            "input": {
-                "workspaceId": self.workspace_id,
-                "title": title,
-                "markdown": markdown,
+        }
+    }
+
+    /// Call the Affine MCP endpoint directly via streamable-HTTP to create a doc.
+    async fn create_via_mcp(&self, title: &str, markdown: &str) -> anyhow::Result<String> {
+        let mcp_url = self.mcp_url.as_deref()
+            .ok_or_else(|| anyhow::anyhow!("no mcp_url configured for this workspace"))?;
+
+        // MCP streamable-HTTP: POST with JSON-RPC
+        let rpc_body = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "createDocument",
+                "arguments": {
+                    "title": title,
+                    "content": markdown,
+                }
             }
         });
-        let resp = self.graphql(query, Some(vars)).await?;
-        let doc_id = resp["data"]["createDoc"]["id"]
-            .as_str()
-            .ok_or_else(|| anyhow::anyhow!("missing doc id in affine response"))?
-            .to_string();
-        Ok(doc_id)
+
+        let resp = self.client
+            .post(mcp_url)
+            .header("Authorization", format!("Bearer {}", self.token))
+            .header("Content-Type", "application/json")
+            .json(&rpc_body)
+            .send()
+            .await?;
+
+        let status = resp.status();
+        let body: Value = resp.json().await?;
+
+        if !status.is_success() {
+            anyhow::bail!("affine MCP returned {status}: {body}");
+        }
+
+        // Extract doc ID from the MCP response
+        if let Some(error) = body.get("error") {
+            anyhow::bail!("affine MCP error: {error}");
+        }
+
+        let result = &body["result"];
+        let doc_id = result.get("content")
+            .and_then(|c| c.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|item| item.get("text"))
+            .and_then(|t| t.as_str())
+            .unwrap_or("unknown");
+
+        tracing::info!(
+            doc_id,
+            title,
+            workspace = self.workspace_id,
+            "created affine doc via MCP"
+        );
+        Ok(doc_id.to_string())
+    }
+
+    async fn save_local(&self, title: &str, markdown: &str) -> anyhow::Result<String> {
+        tokio::fs::create_dir_all(&self.output_dir).await?;
+        let slug: String = title
+            .chars()
+            .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+            .collect::<String>()
+            .trim_matches('-')
+            .to_lowercase();
+        let timestamp = chrono::Utc::now().format("%Y%m%d-%H%M%S");
+        let filename = format!("{timestamp}_{slug}.md");
+        let path = self.output_dir.join(&filename);
+        let content = if markdown.starts_with("# ") {
+            markdown.to_string()
+        } else {
+            format!("# {title}\n\n{markdown}")
+        };
+        tokio::fs::write(&path, &content).await?;
+        tracing::info!(path = %path.display(), "wrote local study doc (fallback)");
+        Ok(path.display().to_string())
     }
 
     #[allow(dead_code)]
@@ -97,30 +177,53 @@ impl AffineClient {
     }
 }
 
+/// Multi-workspace Affine connector.
 pub struct AffineConnector {
-    config: Mutex<crate::config::AffineConfig>,
-    client: Mutex<Option<AffineClient>>,
+    configs: Mutex<HashMap<String, crate::config::AffineConfig>>,
+    clients: Mutex<HashMap<String, AffineClient>>,
     status: AtomicU8,
     error_msg: Mutex<Option<String>>,
 }
 
 impl AffineConnector {
-    pub fn new(config: crate::config::AffineConfig) -> Self {
+    pub fn new(configs: HashMap<String, crate::config::AffineConfig>) -> Self {
         Self {
-            config: Mutex::new(config),
-            client: Mutex::new(None),
+            configs: Mutex::new(configs),
+            clients: Mutex::new(HashMap::new()),
             status: AtomicU8::new(ConnectorStatus::Stopped.as_u8()),
             error_msg: Mutex::new(None),
         }
     }
 
-    pub async fn client(&self) -> anyhow::Result<AffineClient> {
-        self.client
-            .lock()
-            .await
-            .clone()
-            .ok_or_else(|| anyhow::anyhow!("affine connector not running"))
+    pub async fn client(&self, workspace: Option<&str>) -> anyhow::Result<AffineClient> {
+        let clients = self.clients.lock().await;
+        let name = workspace.unwrap_or("default");
+        clients
+            .get(name)
+            .cloned()
+            .ok_or_else(|| {
+                let available: Vec<_> = clients.keys().collect();
+                anyhow::anyhow!(
+                    "affine workspace '{}' not found (available: {:?})",
+                    name,
+                    available
+                )
+            })
     }
+
+    pub async fn workspace_names(&self) -> Vec<String> {
+        self.clients.lock().await.keys().cloned().collect()
+    }
+}
+
+fn build_client(cfg: &crate::config::AffineConfig) -> AffineClient {
+    AffineClient::new(
+        &cfg.api_url,
+        &cfg.api_token,
+        &cfg.workspace_id,
+        cfg.mcp_url.clone(),
+        cfg.output_dir.clone(),
+    )
 }
 
 impl Connector for AffineConnector {
@@ -148,10 +251,15 @@ impl Connector for AffineConnector {
 
     fn start(&self) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + '_>> {
         Box::pin(async move {
-            let config = self.config.lock().await;
-            let new_client = AffineClient::new(&config.api_url, &config.api_token, &config.workspace_id);
-            drop(config);
-            *self.client.lock().await = Some(new_client);
+            let configs = self.configs.lock().await;
+            let mut clients = self.clients.lock().await;
+            clients.clear();
+            for (name, cfg) in configs.iter() {
+                tracing::info!(workspace = name, "affine workspace registered");
+                clients.insert(name.clone(), build_client(cfg));
+            }
+            drop(configs);
+            drop(clients);
             self.status.store(ConnectorStatus::Running.as_u8(), Ordering::SeqCst);
             Ok(())
         })
@@ -159,7 +267,7 @@ impl Connector for AffineConnector {
 
     fn stop(&self) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + '_>> {
         Box::pin(async move {
-            *self.client.lock().await = None;
+            self.clients.lock().await.clear();
             self.status.store(ConnectorStatus::Stopped.as_u8(), Ordering::SeqCst);
             Ok(())
         })
@@ -167,7 +275,7 @@ impl Connector for AffineConnector {
 
     fn health_check(&self) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + '_>> {
         Box::pin(async move {
-            if self.client.lock().await.is_some() {
+            if !self.clients.lock().await.is_empty() {
                 Ok(())
             } else {
                 anyhow::bail!("affine connector not running")
@@ -179,10 +287,15 @@ impl Connector for AffineConnector {
         &self,
         raw_toml: &toml::Value,
     ) -> Pin<Box<dyn Future<Output = anyhow::Result<bool>> + Send + '_>> {
-        let result = raw_toml.clone().try_into::<crate::config::AffineConfig>();
+        let result = raw_toml.clone().try_into::<HashMap<String, crate::config::AffineConfig>>();
         Box::pin(async move {
-            let new_config = result.map_err(|e| anyhow::anyhow!("invalid affine config: {e}"))?;
-            *self.config.lock().await = new_config;
+            let new_configs = result.map_err(|e| anyhow::anyhow!("invalid affine config: {e}"))?;
+            let mut clients = self.clients.lock().await;
+            clients.clear();
+            for (name, cfg) in &new_configs {
+                clients.insert(name.clone(), build_client(cfg));
+            }
+            *self.configs.lock().await = new_configs;
             Ok(true)
         })
     }

@@ -221,6 +221,7 @@ mod tests {
 pub struct StonkwatchSocialConfig {
     pub turso_url: String,
     pub turso_auth_token: String,
+    pub openrouter_api_key: Option<String>,
     pub post_interval_secs: Option<u64>,
     pub x: Option<XConfig>,
     pub bluesky: Option<BlueskyConfig>,

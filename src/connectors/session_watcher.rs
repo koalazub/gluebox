@@ -1,5 +1,6 @@
 use std::any::Any;
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::pin::Pin;
 use std::future::Future;
@@ -14,13 +15,13 @@ pub struct SessionWatcherConnector {
     status: AtomicU8,
     error_msg: Mutex<Option<String>>,
     cancel_token: Mutex<Option<CancellationToken>>,
-    on_session_ready: Box<dyn Fn(String) + Send + Sync>,
+    on_session_ready: Arc<dyn Fn(String) + Send + Sync>,
 }
 
 impl SessionWatcherConnector {
     pub fn new(
         config: crate::config::WatcherConfig,
-        on_session_ready: Box<dyn Fn(String) + Send + Sync>,
+        on_session_ready: Arc<dyn Fn(String) + Send + Sync>,
     ) -> Self {
         Self {
             config: Mutex::new(config),
@@ -105,7 +106,7 @@ impl Connector for SessionWatcherConnector {
                 drop(watcher);
             });
 
-            let on_ready = &self.on_session_ready;
+            let on_ready = self.on_session_ready.clone();
 
             tokio::spawn(async move {
                 let mut debounce_map: HashMap<String, Instant> = HashMap::new();
@@ -124,7 +125,8 @@ impl Connector for SessionWatcherConnector {
                                 }
                             }
                             debounce_map.insert(session_id.clone(), now);
-                            tracing::info!(session_id, "session watcher detected ready session");
+                            tracing::info!(session_id, "session ready, triggering auto-import");
+                            (on_ready)(session_id);
                         }
                     }
                 }
@@ -133,7 +135,6 @@ impl Connector for SessionWatcherConnector {
             *self.cancel_token.lock().await = Some(token);
             self.status.store(ConnectorStatus::Running.as_u8(), Ordering::SeqCst);
             tracing::info!("session watcher started");
-            let _ = on_ready;
             Ok(())
         })
     }

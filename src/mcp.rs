@@ -18,6 +18,14 @@ struct StudyPlanInput {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct CreateDocInput {
+    title: String,
+    markdown: String,
+    /// Affine workspace name (e.g. "default", "stonkington"). Omit for default.
+    workspace: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 struct ToggleConnectorInput {
     name: String,
 }
@@ -129,6 +137,33 @@ impl GlueboxMcp {
         let resp = self
             .client
             .post(format!("{}/api/study-plan", self.base_url))
+            .header("Authorization", self.auth_header())
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        let text = resp
+            .text()
+            .await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![Content::text(text)]))
+    }
+
+    #[tool(description = "Create a document in AFFine. Use 'workspace' to target a specific workspace (e.g. 'default', 'stonkington'). Omit for the default workspace.")]
+    async fn create_document(
+        &self,
+        Parameters(input): Parameters<CreateDocInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let mut body = serde_json::json!({
+            "title": input.title,
+            "markdown": input.markdown,
+        });
+        if let Some(ref ws) = input.workspace {
+            body["workspace"] = serde_json::json!(ws);
+        }
+        let resp = self
+            .client
+            .post(format!("{}/api/doc", self.base_url))
             .header("Authorization", self.auth_header())
             .json(&body)
             .send()

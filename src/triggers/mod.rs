@@ -60,11 +60,18 @@ pub(crate) async fn opencode_from_registry(state: &Arc<AppState>) -> anyhow::Res
 }
 
 pub(crate) async fn affine_from_registry(state: &Arc<AppState>) -> anyhow::Result<AffineClient> {
+    affine_workspace_from_registry(state, None).await
+}
+
+pub(crate) async fn affine_workspace_from_registry(
+    state: &Arc<AppState>,
+    workspace: Option<&str>,
+) -> anyhow::Result<AffineClient> {
     let conn = state.registry.get_dyn("affine").await
         .ok_or_else(|| anyhow::anyhow!("affine connector not available"))?;
     conn.as_any()
         .downcast_ref::<AffineConnector>()
         .ok_or_else(|| anyhow::anyhow!("affine connector type mismatch"))?
-        .client()
+        .client(workspace)
         .await
 }
