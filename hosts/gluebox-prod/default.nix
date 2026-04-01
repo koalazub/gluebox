@@ -167,10 +167,10 @@ in
       StartLimitIntervalSec = 0;
       StateDirectory = "gluebox";
     };
+    path = [ pkgs.typst ];
     environment = {
       GLUEBOX_CONFIG = "/etc/gluebox/gluebox.toml";
       RUST_LOG = "gluebox=info";
-      PATH = "${pkgs.typst}/bin:${pkgs.coreutils}/bin";
     };
     preStart = ''
       mkdir -p /var/lib/gluebox/og-images
