@@ -55,13 +55,11 @@ struct AnnouncementData {
 }
 
 pub async fn fetch_post_candidates(config: &StonkwatchSocialConfig) -> Result<Vec<PostCandidate>> {
-    let db = libsql::Builder::new_remote(
-        config.turso_url.clone(),
-        config.turso_auth_token.clone(),
-    )
-    .build()
-    .await
-    .context("Failed to connect to Stonkwatch Turso DB")?;
+    let url = config.turso_url.replace("libsql://", "https://");
+    let db = libsql::Builder::new_remote(url, config.turso_auth_token.clone())
+        .build()
+        .await
+        .context("Failed to connect to Stonkwatch Turso DB")?;
 
     let conn = db.connect().context("Failed to get connection")?;
 
