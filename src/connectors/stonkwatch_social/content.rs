@@ -23,7 +23,6 @@ HARD RULES:
 WHAT MAKES A GOOD POST:
 - Lead with the insight, not the event. "BHP's iron ore output beat estimates by 12%" not "BHP released their quarterly report"
 - If price-sensitive, convey urgency: "⚡ $BHP just dropped..."
-- If there's sentiment data, weave it in naturally: "...and the market's not buying it"
 - If there's an AI summary, extract the single most interesting finding
 - Vary structure: sometimes a single punchy sentence, sometimes two short ones, sometimes a question
 
@@ -39,6 +38,7 @@ GOOD POSTS (aim for this quality):
 - "Three ASX lithium plays filed updates today. Only one had good news."#;
 
 pub struct PostCandidate {
+    pub id: String,
     pub text: String,
     pub priority: f64,
     pub image_url: Option<String>,
@@ -53,18 +53,12 @@ struct AnnouncementData {
     summary: Option<String>,
 }
 
-pub async fn fetch_post_candidates(config: &StonkwatchSocialConfig) -> Result<Vec<PostCandidate>> {
-    info!(url = %config.turso_url, "Connecting to Stonkwatch Turso DB");
-    let db = turso::sync::Builder::new_remote("/var/lib/gluebox/stonkwatch-replica")
-        .with_remote_url(&config.turso_url)
-        .with_auth_token(&config.turso_auth_token)
-        .build()
-        .await
-        .with_context(|| format!("Failed to connect to Stonkwatch Turso DB at {}", config.turso_url))?;
-
-    let conn = db.connect().await.context("Failed to get Turso connection")?;
-
-    let cutoff = (chrono::Utc::now() - chrono::Duration::hours(6)).timestamp();
+pub async fn fetch_post_candidates(
+    conn: &turso::Connection,
+    config: &StonkwatchSocialConfig,
+    already_posted: &std::collections::HashSet<String>,
+) -> Result<Vec<PostCandidate>> {
+    let cutoff = (chrono::Utc::now() - chrono::Duration::hours(24)).timestamp();
 
     let mut rows = match conn
         .query(
@@ -90,8 +84,12 @@ pub async fn fetch_post_candidates(config: &StonkwatchSocialConfig) -> Result<Ve
     while let Some(row) = rows.next().await
         .context("Failed to iterate announcement rows")?
     {
+        let id = row.get_value(0).ok().and_then(|v| v.as_text().map(|s| s.to_string())).unwrap_or_default();
+        if already_posted.contains(&id) {
+            continue;
+        }
         announcements.push(AnnouncementData {
-            id: row.get_value(0).ok().and_then(|v| v.as_text().map(|s| s.to_string())).unwrap_or_default(),
+            id,
             symbol: row.get_value(1).ok().and_then(|v| v.as_text().map(|s| s.to_string())).unwrap_or_default(),
             title: row.get_value(2).ok().and_then(|v| v.as_text().map(|s| s.to_string())).unwrap_or_default(),
             ann_type: row.get_value(3).ok().and_then(|v| v.as_text().map(|s| s.to_string())).unwrap_or_default(),
@@ -101,7 +99,7 @@ pub async fn fetch_post_candidates(config: &StonkwatchSocialConfig) -> Result<Ve
     }
 
     if announcements.is_empty() {
-        info!("No announcements found in the last 6 hours");
+        info!("No new announcements in the last 24 hours");
         return Ok(Vec::new());
     }
 
@@ -150,6 +148,7 @@ pub async fn fetch_post_candidates(config: &StonkwatchSocialConfig) -> Result<Ve
         };
 
         candidates.push(PostCandidate {
+            id: ann.id.clone(),
             text,
             priority,
             image_url: image_path,

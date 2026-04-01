@@ -3,10 +3,32 @@ use chrono::Utc;
 
 use crate::config::BlueskyConfig;
 
-pub async fn post(config: &BlueskyConfig, text: &str) -> Result<String> {
+pub struct CachedSession {
+    did: String,
+    access_jwt: String,
+    created_at: chrono::DateTime<Utc>,
+}
+
+impl CachedSession {
+    fn is_expired(&self) -> bool {
+        Utc::now().signed_duration_since(self.created_at) > chrono::Duration::minutes(90)
+    }
+}
+
+pub async fn post_with_session(
+    config: &BlueskyConfig,
+    text: &str,
+    cached: &mut Option<CachedSession>,
+) -> Result<String> {
     let client = reqwest::Client::new();
 
-    let session = create_session(&client, &config.identifier, &config.password).await?;
+    let needs_refresh = cached.as_ref().is_none_or(|s| s.is_expired());
+    if needs_refresh {
+        let session = create_session(&client, config).await?;
+        *cached = Some(session);
+    }
+
+    let session = cached.as_ref().unwrap();
 
     let record = serde_json::json!({
         "repo": session.did,
@@ -30,6 +52,9 @@ pub async fn post(config: &BlueskyConfig, text: &str) -> Result<String> {
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
+        if status.as_u16() == 401 {
+            *cached = None;
+        }
         anyhow::bail!("Bluesky API error {}: {}", status, body);
     }
 
@@ -37,21 +62,14 @@ pub async fn post(config: &BlueskyConfig, text: &str) -> Result<String> {
     Ok(result["uri"].as_str().unwrap_or("unknown").to_string())
 }
 
-#[derive(serde::Deserialize)]
-struct Session {
-    did: String,
-    #[serde(rename = "accessJwt")]
-    access_jwt: String,
-}
-
-async fn create_session(client: &reqwest::Client, identifier: &str, password: &str) -> Result<Session> {
+async fn create_session(client: &reqwest::Client, config: &BlueskyConfig) -> Result<CachedSession> {
     let body = serde_json::json!({
-        "identifier": identifier,
-        "password": password,
+        "identifier": config.identifier,
+        "password": config.password,
     });
 
     let response = client
-        .post("https://bsky.social/xrpc/com.atproto.server.createSession")
+        .post(format!("{}/xrpc/com.atproto.server.createSession", config.service_url))
         .json(&body)
         .send()
         .await
@@ -63,5 +81,14 @@ async fn create_session(client: &reqwest::Client, identifier: &str, password: &s
         anyhow::bail!("Bluesky auth error {}: {}", status, body);
     }
 
-    response.json().await.context("Failed to parse Bluesky session")
+    let result: serde_json::Value = response.json().await.context("Failed to parse Bluesky session")?;
+
+    let did = result["did"].as_str().context("Missing 'did' in Bluesky session")?.to_string();
+    let access_jwt = result["accessJwt"].as_str().context("Missing 'accessJwt' in Bluesky session")?.to_string();
+
+    Ok(CachedSession {
+        did,
+        access_jwt,
+        created_at: Utc::now(),
+    })
 }

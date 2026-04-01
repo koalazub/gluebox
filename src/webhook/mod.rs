@@ -740,7 +740,16 @@ async fn generate_social_post(
     let config = state.config.read().await;
     let social_cfg = config.stonkwatch_social.as_ref().ok_or(StatusCode::NOT_FOUND)?;
 
-    let candidates = crate::connectors::stonkwatch_social::content::fetch_post_candidates(social_cfg)
+    let db = turso::sync::Builder::new_remote("/var/lib/gluebox/stonkwatch-replica")
+        .with_remote_url(&social_cfg.turso_url)
+        .with_auth_token(&social_cfg.turso_auth_token)
+        .build()
+        .await
+        .map_err(|e| { tracing::error!("Turso connect failed: {e}"); StatusCode::INTERNAL_SERVER_ERROR })?;
+    let conn = db.connect().await.map_err(|e| { tracing::error!("Turso conn failed: {e}"); StatusCode::INTERNAL_SERVER_ERROR })?;
+    let empty = std::collections::HashSet::new();
+
+    let candidates = crate::connectors::stonkwatch_social::content::fetch_post_candidates(&conn, social_cfg, &empty)
         .await
         .map_err(|e| {
             tracing::error!("Failed to fetch candidates: {e}");
@@ -783,7 +792,7 @@ async fn publish_social_post(
             }
             "bluesky" => {
                 if let Some(ref bsky_cfg) = social_cfg.bluesky {
-                    match crate::connectors::stonkwatch_social::bluesky::post(bsky_cfg, &text).await {
+                    match crate::connectors::stonkwatch_social::bluesky::post_with_session(bsky_cfg, &text, &mut None).await {
                         Ok(uri) => { results.insert("bluesky".into(), serde_json::json!({"ok": true, "uri": uri})); }
                         Err(e) => { results.insert("bluesky".into(), serde_json::json!({"ok": false, "error": e.to_string()})); }
                     }
@@ -821,7 +830,16 @@ async fn generate_and_post_all(
     let config = state.config.read().await;
     let social_cfg = config.stonkwatch_social.as_ref().ok_or(StatusCode::NOT_FOUND)?;
 
-    let candidates = crate::connectors::stonkwatch_social::content::fetch_post_candidates(social_cfg)
+    let db = turso::sync::Builder::new_remote("/var/lib/gluebox/stonkwatch-replica")
+        .with_remote_url(&social_cfg.turso_url)
+        .with_auth_token(&social_cfg.turso_auth_token)
+        .build()
+        .await
+        .map_err(|e| { tracing::error!("Turso connect failed: {e}"); StatusCode::INTERNAL_SERVER_ERROR })?;
+    let conn = db.connect().await.map_err(|e| { tracing::error!("Turso conn failed: {e}"); StatusCode::INTERNAL_SERVER_ERROR })?;
+    let empty = std::collections::HashSet::new();
+
+    let candidates = crate::connectors::stonkwatch_social::content::fetch_post_candidates(&conn, social_cfg, &empty)
         .await
         .map_err(|e| {
             tracing::error!("Failed to fetch candidates: {e}");
@@ -830,6 +848,7 @@ async fn generate_and_post_all(
 
     let to_post: Vec<_> = candidates.into_iter().take(5).collect();
     let mut posted = Vec::new();
+    let mut bsky_session = None;
 
     for post in &to_post {
         let mut result = serde_json::Map::new();
@@ -842,7 +861,7 @@ async fn generate_and_post_all(
             }
         }
         if let Some(ref bsky_cfg) = social_cfg.bluesky {
-            match crate::connectors::stonkwatch_social::bluesky::post(bsky_cfg, &post.text).await {
+            match crate::connectors::stonkwatch_social::bluesky::post_with_session(bsky_cfg, &post.text, &mut bsky_session).await {
                 Ok(uri) => { result.insert("bluesky".into(), serde_json::json!(uri)); }
                 Err(e) => { result.insert("bluesky_error".into(), serde_json::json!(e.to_string())); }
             }

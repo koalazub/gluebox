@@ -6,6 +6,7 @@ pub mod instagram;
 pub mod facebook;
 
 use std::any::Any;
+use std::collections::HashSet;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -35,22 +36,48 @@ impl StonkwatchSocialConnector {
     async fn run_posting_loop(config: StonkwatchSocialConfig) {
         let interval_secs = config.post_interval_secs.unwrap_or(14400);
 
-        if let Some(ref room_id) = config.review_room_id {
-            info!(room_id, "Review mode enabled — posts will be sent to Matrix for approval");
-        }
+        Self::log_platform_status(&config);
+
+        let db = match turso::sync::Builder::new_remote("/var/lib/gluebox/stonkwatch-replica")
+            .with_remote_url(&config.turso_url)
+            .with_auth_token(&config.turso_auth_token)
+            .build()
+            .await
+        {
+            Ok(db) => db,
+            Err(e) => {
+                error!(error = %e, "Failed to connect to Stonkwatch Turso DB — social connector stopping");
+                return;
+            }
+        };
+
+        info!(url = %config.turso_url, "Connected to Stonkwatch Turso DB");
+
+        let mut posted_ids: HashSet<String> = HashSet::new();
+        let mut bsky_session: Option<bluesky::CachedSession> = None;
 
         loop {
             info!("Stonkwatch social: checking for content to post");
 
-            match content::fetch_post_candidates(&config).await {
+            let conn = match db.connect().await {
+                Ok(c) => c,
+                Err(e) => {
+                    error!(error = %e, "Failed to get Turso connection");
+                    tokio::time::sleep(std::time::Duration::from_secs(interval_secs)).await;
+                    continue;
+                }
+            };
+
+            match content::fetch_post_candidates(&conn, &config, &posted_ids).await {
                 Ok(candidates) => {
                     let to_post: Vec<_> = candidates.into_iter().take(5).collect();
                     if to_post.is_empty() {
-                        info!("No notable events to post about");
+                        info!("No new announcements to post about");
                     } else if config.auto_post {
                         info!("Auto-posting {} updates across platforms", to_post.len());
                         for post in &to_post {
-                            Self::post_to_all_platforms(&config, post).await;
+                            Self::post_to_all_platforms(&config, post, &mut bsky_session).await;
+                            posted_ids.insert(post.id.clone());
                             tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                         }
                     } else if config.review_room_id.is_some() {
@@ -63,6 +90,7 @@ impl StonkwatchSocialConnector {
                                 post.text
                             );
                             Self::send_to_review(&config, &preview).await;
+                            posted_ids.insert(post.id.clone());
                         }
                     } else {
                         info!("auto_post=false and no review_room_id — {} posts generated but not sent", to_post.len());
@@ -73,7 +101,41 @@ impl StonkwatchSocialConnector {
                 }
             }
 
+            if posted_ids.len() > 500 {
+                posted_ids.clear();
+            }
+
             tokio::time::sleep(std::time::Duration::from_secs(interval_secs)).await;
+        }
+    }
+
+    fn log_platform_status(config: &StonkwatchSocialConfig) {
+        if config.x.is_some() {
+            info!(platform = "x", "Configured");
+        } else {
+            warn!(platform = "x", "Not configured — posts will be skipped");
+        }
+        if config.bluesky.is_some() {
+            info!(platform = "bluesky", "Configured");
+        } else {
+            warn!(platform = "bluesky", "Not configured — posts will be skipped");
+        }
+        if config.instagram.is_some() {
+            info!(platform = "instagram", "Configured");
+        } else {
+            warn!(platform = "instagram", "Not configured — posts will be skipped");
+        }
+        if config.facebook.is_some() {
+            info!(platform = "facebook", "Configured");
+        } else {
+            warn!(platform = "facebook", "Not configured — posts will be skipped");
+        }
+        if config.auto_post {
+            info!("Auto-post enabled");
+        } else if config.review_room_id.is_some() {
+            info!(room_id = config.review_room_id.as_deref().unwrap_or(""), "Review mode enabled — posts will be sent to Matrix for approval");
+        } else {
+            warn!("auto_post=false and no review_room_id — posts will be generated but NOT sent anywhere");
         }
     }
 
@@ -107,32 +169,36 @@ impl StonkwatchSocialConnector {
         }
     }
 
-    async fn post_to_all_platforms(config: &StonkwatchSocialConfig, post: &content::PostCandidate) {
+    async fn post_to_all_platforms(
+        config: &StonkwatchSocialConfig,
+        post: &content::PostCandidate,
+        bsky_session: &mut Option<bluesky::CachedSession>,
+    ) {
         if let Some(ref x_cfg) = config.x {
             match x::post_tweet(x_cfg, &post.text).await {
                 Ok(id) => info!(platform = "x", tweet_id = %id, "Posted"),
-                Err(e) => warn!(platform = "x", error = %e, "Failed to post"),
+                Err(e) => error!(platform = "x", error = %e, "Failed to post"),
             }
         }
 
         if let Some(ref bsky_cfg) = config.bluesky {
-            match bluesky::post(bsky_cfg, &post.text).await {
+            match bluesky::post_with_session(bsky_cfg, &post.text, bsky_session).await {
                 Ok(uri) => info!(platform = "bluesky", uri = %uri, "Posted"),
-                Err(e) => warn!(platform = "bluesky", error = %e, "Failed to post"),
+                Err(e) => error!(platform = "bluesky", error = %e, "Failed to post"),
             }
         }
 
         if let Some(ref ig_cfg) = config.instagram {
             match instagram::post(ig_cfg, &post.text, post.image_url.as_deref()).await {
                 Ok(id) => info!(platform = "instagram", post_id = %id, "Posted"),
-                Err(e) => warn!(platform = "instagram", error = %e, "Failed to post"),
+                Err(e) => error!(platform = "instagram", error = %e, "Failed to post"),
             }
         }
 
         if let Some(ref fb_cfg) = config.facebook {
             match facebook::post(fb_cfg, &post.text).await {
                 Ok(id) => info!(platform = "facebook", post_id = %id, "Posted"),
-                Err(e) => warn!(platform = "facebook", error = %e, "Failed to post"),
+                Err(e) => error!(platform = "facebook", error = %e, "Failed to post"),
             }
         }
     }
