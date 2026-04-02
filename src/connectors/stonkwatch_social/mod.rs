@@ -19,6 +19,32 @@ use crate::connector::{Connector, ConnectorStatus};
 use crate::config::StonkwatchSocialConfig;
 use platform::{SocialPlatform, SocialPost};
 
+const PROMO_MESSAGES: &[(&str, &str)] = &[
+    (
+        "Track ASX announcements with AI-powered summaries, real-time alerts, and community discussion. Free to use.\n\nhttps://stonkwatch.app/feed",
+        "https://stonkwatch.app/feed",
+    ),
+    (
+        "Every ASX announcement, analysed by AI in seconds. No more reading 50-page PDFs.\n\nhttps://stonkwatch.app/register",
+        "https://stonkwatch.app/register",
+    ),
+    (
+        "New to Bluesky? Follow the ASX investing community — traders, analysts, and market watchers.\n\nhttps://bsky.app/starter-pack/stonkwatch.bsky.social",
+        "https://bsky.app/starter-pack/stonkwatch.bsky.social",
+    ),
+];
+
+fn is_asx_market_hours() -> bool {
+    let now = chrono::Utc::now() + chrono::Duration::hours(10);
+    let hour = now.hour();
+    let weekday = now.weekday();
+    matches!(weekday, chrono::Weekday::Mon | chrono::Weekday::Tue | chrono::Weekday::Wed | chrono::Weekday::Thu | chrono::Weekday::Fri)
+        && (10..16).contains(&hour)
+}
+
+use chrono::Datelike;
+use chrono::Timelike;
+
 pub struct StonkwatchSocialConnector {
     config: Mutex<StonkwatchSocialConfig>,
     status: AtomicU8,
@@ -85,8 +111,11 @@ impl StonkwatchSocialConnector {
         info!(url = %config.turso_url, "Connected to Stonkwatch Turso DB");
 
         let mut posted_ids: HashSet<String> = HashSet::new();
+        let mut cycle_count: u64 = 0;
+        let mut promo_index: usize = 0;
 
         loop {
+            cycle_count += 1;
             info!("Stonkwatch social: checking for content to post");
 
             let conn = match db.connect().await {
@@ -134,6 +163,21 @@ impl StonkwatchSocialConnector {
 
             if posted_ids.len() > 500 {
                 posted_ids.clear();
+            }
+
+            let promo_interval = if is_asx_market_hours() { 6 } else { 12 };
+            if cycle_count % promo_interval == 0 {
+                let (text, link) = PROMO_MESSAGES[promo_index % PROMO_MESSAGES.len()];
+                let promo = SocialPost {
+                    text: text.to_string(),
+                    link: link.to_string(),
+                    image_url: None,
+                    og_title: "Stonkwatch — ASX Market Intelligence".to_string(),
+                    og_description: "AI-powered ASX announcement summaries, sentiment tracking, and market analysis.".to_string(),
+                };
+                info!("Posting promo message {}", promo_index + 1);
+                Self::post_to_all_platforms(&platforms, &promo).await;
+                promo_index += 1;
             }
 
             tokio::time::sleep(std::time::Duration::from_secs(interval_secs)).await;
