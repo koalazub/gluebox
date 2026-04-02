@@ -2,6 +2,8 @@ use anyhow::{Context, Result};
 use std::path::Path;
 use tracing::info;
 
+const TEMPLATE_VERSION: u32 = 2;
+
 pub async fn generate_og_image(
     symbol: &str,
     title: &str,
@@ -11,7 +13,7 @@ pub async fn generate_og_image(
     announcement_id: &str,
     output_dir: &Path,
 ) -> Result<std::path::PathBuf> {
-    let output_path = output_dir.join(format!("{}.png", announcement_id));
+    let output_path = output_dir.join(format!("{}-v{}.png", announcement_id, TEMPLATE_VERSION));
 
     if output_path.exists() {
         return Ok(output_path);
@@ -34,7 +36,7 @@ pub async fn generate_story_image(
     link: &str,
     output_dir: &Path,
 ) -> Result<std::path::PathBuf> {
-    let output_path = output_dir.join(format!("{}-story.png", announcement_id));
+    let output_path = output_dir.join(format!("{}-story-v{}.png", announcement_id, TEMPLATE_VERSION));
 
     if output_path.exists() {
         return Ok(output_path);
