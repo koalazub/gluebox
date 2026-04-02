@@ -86,7 +86,7 @@ pub async fn fetch_announcements(
         let importance = row.get_value(4).ok().and_then(|v| v.as_text().map(|s| s.to_string())).unwrap_or_default();
         let summary = row.get_value(5).ok().and_then(|v| v.as_text().map(|s| s.to_string()));
 
-        let link = format!("{}/announcement/{}?utm_source=social&utm_medium=bot", APP_URL, id);
+        let link = format!("{}/announcement/{}", APP_URL, id);
 
         announcements.push(AnnouncementData {
             id,
