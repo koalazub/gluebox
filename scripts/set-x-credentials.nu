@@ -6,14 +6,16 @@ let client_secret = (input "X OAuth 2.0 Client Secret: ")
 let code_verifier = (random chars --length 64)
 let state = (random chars --length 16)
 
-let auth_url = $"https://twitter.com/i/oauth2/authorize?response_type=code&client_id=($client_id)&redirect_uri=https%3A%2F%2Fstonkwatch.app%2Fauth%2Fcallback&scope=tweet.read%20tweet.write%20users.read%20offline.access&state=($state)&code_challenge=($code_verifier)&code_challenge_method=plain"
+let auth_url = $"https://x.com/i/oauth2/authorize?response_type=code&client_id=($client_id)&redirect_uri=https%3A%2F%2Fstonkwatch.app%2Fauth%2Fcallback&scope=tweet.read%20tweet.write%20users.read%20offline.access&state=($state)&code_challenge=($code_verifier)&code_challenge_method=plain"
 
 print ""
 print "Open this URL in your browser and authorize the app:"
 print ""
 print $auth_url
 print ""
-print "After authorizing, you'll be redirected. Copy the 'code' parameter from the URL."
+print "After authorizing, you'll be redirected to stonkwatch.app/auth/callback."
+print "The page will 404 — that's fine. Copy the 'code' parameter from the URL bar."
+print "It looks like: ?state=...&code=THIS_PART"
 print ""
 
 let auth_code = (input "Paste the authorization code: ")
@@ -21,11 +23,18 @@ let auth_code = (input "Paste the authorization code: ")
 print ""
 print "Exchanging code for tokens..."
 
-let token_response = (http post "https://api.twitter.com/2/oauth2/token"
+let token_response = (http post
     --content-type "application/x-www-form-urlencoded"
-    --user $"($client_id):($client_secret)"
+    --user $client_id
+    --password $client_secret
     --headers [Accept "application/json"]
-    $"grant_type=authorization_code&code=($auth_code)&redirect_uri=https%3A%2F%2Fstonkwatch.app%2Fauth%2Fcallback&code_verifier=($code_verifier)"
+    "https://api.x.com/2/oauth2/token"
+    {
+        grant_type: "authorization_code",
+        code: $auth_code,
+        redirect_uri: "https://stonkwatch.app/auth/callback",
+        code_verifier: $code_verifier,
+    }
 )
 
 let access_token = ($token_response | get access_token)
@@ -46,6 +55,7 @@ print ""
 print "Updating gluebox prod config..."
 
 let toml_block = [
+    ""
     "[stonkwatch_social.x]"
     $'client_id = "($client_id)"'
     $'client_secret = "($client_secret)"'

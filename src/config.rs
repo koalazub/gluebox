@@ -247,6 +247,26 @@ pub struct StonkwatchSocialConfig {
     pub x: Option<XConfig>,
     pub bluesky: Option<BlueskyConfig>,
     pub meta: Option<MetaConfig>,
+    pub storj: Option<StorjConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct StorjConfig {
+    pub access_key: String,
+    pub secret_key: String,
+    pub bucket: String,
+    #[serde(default = "default_storj_endpoint")]
+    pub endpoint: String,
+    #[serde(default = "default_storj_public_base")]
+    pub public_base_url: String,
+}
+
+fn default_storj_endpoint() -> String {
+    "https://gateway.storjshare.io".to_string()
+}
+
+fn default_storj_public_base() -> String {
+    "https://link.storjshare.io/raw".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

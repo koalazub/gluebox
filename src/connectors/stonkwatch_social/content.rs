@@ -137,7 +137,20 @@ pub async fn fetch_post_candidates(
             &og_data,
             std::path::Path::new("/var/lib/gluebox/og-images"),
         ).await {
-            Ok(path) => Some(path.display().to_string()),
+            Ok(local_path) => {
+                if let Some(ref storj_cfg) = config.storj {
+                    let object_key = format!("og/{}.png", id);
+                    match super::storj::upload_image(storj_cfg, &local_path.display().to_string(), &object_key).await {
+                        Ok(public_url) => Some(public_url),
+                        Err(e) => {
+                            warn!(symbol, error = %e, "Storj upload failed, using local path");
+                            Some(local_path.display().to_string())
+                        }
+                    }
+                } else {
+                    Some(local_path.display().to_string())
+                }
+            }
             Err(e) => {
                 warn!(symbol, error = %e, "OG image generation failed");
                 None
