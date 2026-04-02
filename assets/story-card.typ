@@ -4,10 +4,10 @@
 #let bg = rgb("#0a0a0a")
 #let surface = rgb("#141414")
 #let green = rgb("#00ff88")
-#let red = rgb("#ff4444")
 #let amber = rgb("#ffaa00")
 #let muted = rgb("#666666")
 #let border = rgb("#333333")
+#let white = rgb("#ffffff")
 
 #let symbol = sys.inputs.at("symbol", default: "ASX")
 #let title = sys.inputs.at("title", default: "Announcement")
@@ -19,24 +19,35 @@
 #block(width: 100%, height: 100%, fill: bg)[
   #block(width: 100%, height: 6pt, fill: green)
 
-  #pad(x: 60pt, top: 120pt)[
-    #text(size: 72pt, weight: "bold", fill: green)[
+  #pad(x: 64pt, top: 200pt, bottom: 120pt)[
+
+    #text(size: 80pt, weight: "bold", fill: green)[
       \$#symbol
     ]
 
+    #v(24pt)
+
     #if is-sensitive == "true" [
-      #v(16pt)
       #box(
         fill: amber.transparentize(80%),
         inset: (x: 16pt, y: 10pt),
       )[
-        #text(size: 24pt, weight: "bold", fill: amber)[⚡ PRICE SENSITIVE]
+        #text(size: 28pt, weight: "bold", fill: amber)[⚡ PRICE SENSITIVE]
       ]
+      #v(24pt)
     ]
 
-    #v(40pt)
+    #box(
+      fill: surface,
+      inset: (x: 14pt, y: 8pt),
+      stroke: 1pt + border,
+    )[
+      #text(size: 18pt, fill: muted)[#upper(ann-type)]
+    ]
 
-    #text(size: 40pt, weight: "bold", fill: rgb("#ffffff"))[
+    #v(48pt)
+
+    #text(size: 44pt, weight: "bold", fill: white)[
       #title
     ]
 
@@ -53,6 +64,17 @@
           #summary
         ]
       ]
+    ] else [
+      #block(
+        width: 100%,
+        fill: surface,
+        inset: 32pt,
+        stroke: (left: 4pt + green),
+      )[
+        #text(size: 28pt, fill: rgb("#cccccc"))[
+          New #ann-type announcement from \$#symbol on the ASX. Full AI analysis available.
+        ]
+      ]
     ]
 
     #v(1fr)
@@ -60,27 +82,21 @@
     #align(center)[
       #block(
         fill: green,
-        inset: (x: 40pt, y: 16pt),
+        inset: (x: 48pt, y: 20pt),
         width: 100%,
       )[
-        #text(size: 28pt, weight: "bold", fill: bg)[
-          SWIPE UP — FULL ANALYSIS
+        #align(center)[
+          #text(size: 30pt, weight: "bold", fill: bg)[
+            READ FULL ANALYSIS
+          ]
         ]
       ]
 
-      #v(24pt)
+      #v(32pt)
 
-      #text(size: 22pt, fill: muted)[
-        #link
-      ]
-
-      #v(40pt)
-
-      #text(size: 28pt, weight: "bold", fill: green)[STONKWATCH]
+      #text(size: 32pt, weight: "bold", fill: green)[STONKWATCH]
       #v(8pt)
-      #text(size: 20pt, fill: muted)[ASX Market Intelligence]
+      #text(size: 18pt, fill: muted)[stonkwatch.app]
     ]
-
-    #v(80pt)
   ]
 ]
