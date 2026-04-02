@@ -76,7 +76,7 @@ impl StonkwatchSocialConnector {
                         info!("Auto-posting {} updates across platforms", to_post.len());
                         for post in &to_post {
                             Self::post_to_all_platforms(&config, post, &mut bsky_session).await;
-                            posted_ids.insert(post.id.clone());
+                            posted_ids.insert(post.announcement_id.clone());
                             tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                         }
                     } else if config.review_room_id.is_some() {
@@ -89,7 +89,7 @@ impl StonkwatchSocialConnector {
                                 post.text
                             );
                             Self::send_to_review(&config, &preview).await;
-                            posted_ids.insert(post.id.clone());
+                            posted_ids.insert(post.announcement_id.clone());
                         }
                     } else {
                         info!("auto_post=false and no review_room_id — {} posts generated but not sent", to_post.len());
@@ -171,21 +171,21 @@ impl StonkwatchSocialConnector {
         bsky_session: &mut Option<bluesky::CachedSession>,
     ) {
         if let Some(ref x_cfg) = config.x {
-            match x::post_tweet(x_cfg, &post.text).await {
+            match x::post_tweet(x_cfg, post).await {
                 Ok(id) => info!(platform = "x", tweet_id = %id, "Posted"),
                 Err(e) => error!(platform = "x", error = %e, "Failed to post"),
             }
         }
 
         if let Some(ref bsky_cfg) = config.bluesky {
-            match bluesky::post_with_session(bsky_cfg, &post.text, bsky_session).await {
+            match bluesky::post_with_session(bsky_cfg, post, bsky_session).await {
                 Ok(uri) => info!(platform = "bluesky", uri = %uri, "Posted"),
                 Err(e) => error!(platform = "bluesky", error = %e, "Failed to post"),
             }
         }
 
         if let Some(ref meta_cfg) = config.meta {
-            for (platform, result) in meta::post_all(meta_cfg, &post.text, post.image_url.as_deref()).await {
+            for (platform, result) in meta::post_all(meta_cfg, post).await {
                 match result {
                     Ok(id) => info!(%platform, post_id = %id, "Posted"),
                     Err(e) => error!(%platform, error = %e, "Failed to post"),

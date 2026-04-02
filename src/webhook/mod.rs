@@ -777,6 +777,18 @@ async fn publish_social_post(
     let config = state.config.read().await;
     let social_cfg = config.stonkwatch_social.as_ref().ok_or(StatusCode::NOT_FOUND)?;
 
+    let post = crate::connectors::stonkwatch_social::content::PostCandidate {
+        announcement_id: String::new(),
+        symbol: String::new(),
+        title: String::new(),
+        ann_type: String::new(),
+        importance: String::new(),
+        summary: None,
+        link: String::new(),
+        text: text.clone(),
+        og_image_path: None,
+    };
+
     let platforms = req.platforms.unwrap_or_else(|| vec!["x".into(), "bluesky".into()]);
     let mut results = serde_json::Map::new();
 
@@ -784,7 +796,7 @@ async fn publish_social_post(
         match platform.as_str() {
             "x" => {
                 if let Some(ref x_cfg) = social_cfg.x {
-                    match crate::connectors::stonkwatch_social::x::post_tweet(x_cfg, &text).await {
+                    match crate::connectors::stonkwatch_social::x::post_tweet(x_cfg, &post).await {
                         Ok(id) => { results.insert("x".into(), serde_json::json!({"ok": true, "id": id})); }
                         Err(e) => { results.insert("x".into(), serde_json::json!({"ok": false, "error": e.to_string()})); }
                     }
@@ -792,7 +804,7 @@ async fn publish_social_post(
             }
             "bluesky" => {
                 if let Some(ref bsky_cfg) = social_cfg.bluesky {
-                    match crate::connectors::stonkwatch_social::bluesky::post_with_session(bsky_cfg, &text, &mut None).await {
+                    match crate::connectors::stonkwatch_social::bluesky::post_with_session(bsky_cfg, &post, &mut None).await {
                         Ok(uri) => { results.insert("bluesky".into(), serde_json::json!({"ok": true, "uri": uri})); }
                         Err(e) => { results.insert("bluesky".into(), serde_json::json!({"ok": false, "error": e.to_string()})); }
                     }
@@ -801,9 +813,9 @@ async fn publish_social_post(
             "facebook" | "instagram" | "threads" => {
                 if let Some(ref meta_cfg) = social_cfg.meta {
                     let result = match platform.as_str() {
-                        "facebook" => crate::connectors::stonkwatch_social::meta::post_to_facebook(meta_cfg, &text).await,
-                        "instagram" => crate::connectors::stonkwatch_social::meta::post_to_instagram(meta_cfg, &text, "").await,
-                        "threads" => crate::connectors::stonkwatch_social::meta::post_to_threads(meta_cfg, &text).await,
+                        "facebook" => crate::connectors::stonkwatch_social::meta::post_to_facebook(meta_cfg, &post).await,
+                        "instagram" => crate::connectors::stonkwatch_social::meta::post_to_instagram(meta_cfg, &post).await,
+                        "threads" => crate::connectors::stonkwatch_social::meta::post_to_threads(meta_cfg, &post).await,
                         _ => unreachable!(),
                     };
                     match result {
@@ -853,19 +865,19 @@ async fn generate_and_post_all(
         result.insert("text".into(), serde_json::json!(post.text));
 
         if let Some(ref x_cfg) = social_cfg.x {
-            match crate::connectors::stonkwatch_social::x::post_tweet(x_cfg, &post.text).await {
+            match crate::connectors::stonkwatch_social::x::post_tweet(x_cfg, post).await {
                 Ok(id) => { result.insert("x".into(), serde_json::json!(id)); }
                 Err(e) => { result.insert("x_error".into(), serde_json::json!(e.to_string())); }
             }
         }
         if let Some(ref bsky_cfg) = social_cfg.bluesky {
-            match crate::connectors::stonkwatch_social::bluesky::post_with_session(bsky_cfg, &post.text, &mut bsky_session).await {
+            match crate::connectors::stonkwatch_social::bluesky::post_with_session(bsky_cfg, post, &mut bsky_session).await {
                 Ok(uri) => { result.insert("bluesky".into(), serde_json::json!(uri)); }
                 Err(e) => { result.insert("bluesky_error".into(), serde_json::json!(e.to_string())); }
             }
         }
         if let Some(ref meta_cfg) = social_cfg.meta {
-            for (platform, res) in crate::connectors::stonkwatch_social::meta::post_all(meta_cfg, &post.text, post.image_url.as_deref()).await {
+            for (platform, res) in crate::connectors::stonkwatch_social::meta::post_all(meta_cfg, post).await {
                 match res {
                     Ok(id) => { result.insert(platform.into(), serde_json::json!(id)); }
                     Err(e) => { result.insert(format!("{}_error", platform), serde_json::json!(e.to_string())); }

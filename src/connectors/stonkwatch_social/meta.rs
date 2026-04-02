@@ -2,18 +2,16 @@ use anyhow::{Context, Result};
 use tracing::info;
 
 use crate::config::MetaConfig;
+use super::content::PostCandidate;
 
-pub async fn post_to_facebook(config: &MetaConfig, message: &str) -> Result<String> {
+pub async fn post_to_facebook(config: &MetaConfig, post: &PostCandidate) -> Result<String> {
     let client = reqwest::Client::new();
 
     let response = client
-        .post(format!(
-            "https://graph.facebook.com/v21.0/{}/feed",
-            config.page_id
-        ))
+        .post(format!("https://graph.facebook.com/v21.0/{}/feed", config.page_id))
         .form(&[
-            ("message", message),
-            ("access_token", &config.page_access_token),
+            ("message", post.text.as_str()),
+            ("access_token", config.page_access_token.as_str()),
         ])
         .send()
         .await
@@ -26,25 +24,27 @@ pub async fn post_to_facebook(config: &MetaConfig, message: &str) -> Result<Stri
     }
 
     let result: serde_json::Value = response.json().await?;
-    let id = result["id"].as_str().context("Missing 'id' in Facebook response")?;
-    Ok(id.to_string())
+    result["id"]
+        .as_str()
+        .map(|s| s.to_string())
+        .context("Missing 'id' in Facebook response")
 }
 
-pub async fn post_to_instagram(config: &MetaConfig, caption: &str, image_url: &str) -> Result<String> {
+pub async fn post_to_instagram(config: &MetaConfig, post: &PostCandidate) -> Result<String> {
     let client = reqwest::Client::new();
 
     let ig_user_id = config.ig_user_id.as_deref()
         .context("ig_user_id required for Instagram posting")?;
 
+    let image_url = post.og_image_path.as_deref()
+        .context("Instagram requires an image URL")?;
+
     let container_response = client
-        .post(format!(
-            "https://graph.facebook.com/v21.0/{}/media",
-            ig_user_id
-        ))
+        .post(format!("https://graph.facebook.com/v21.0/{}/media", ig_user_id))
         .form(&[
             ("image_url", image_url),
-            ("caption", caption),
-            ("access_token", &config.page_access_token),
+            ("caption", post.text.as_str()),
+            ("access_token", config.page_access_token.as_str()),
         ])
         .send()
         .await
@@ -64,13 +64,10 @@ pub async fn post_to_instagram(config: &MetaConfig, caption: &str, image_url: &s
     tokio::time::sleep(std::time::Duration::from_secs(10)).await;
 
     let publish_response = client
-        .post(format!(
-            "https://graph.facebook.com/v21.0/{}/media_publish",
-            ig_user_id
-        ))
+        .post(format!("https://graph.facebook.com/v21.0/{}/media_publish", ig_user_id))
         .form(&[
             ("creation_id", container_id),
-            ("access_token", &config.page_access_token),
+            ("access_token", config.page_access_token.as_str()),
         ])
         .send()
         .await
@@ -83,25 +80,24 @@ pub async fn post_to_instagram(config: &MetaConfig, caption: &str, image_url: &s
     }
 
     let result: serde_json::Value = publish_response.json().await?;
-    let id = result["id"].as_str().context("Missing 'id' in Instagram response")?;
-    Ok(id.to_string())
+    result["id"]
+        .as_str()
+        .map(|s| s.to_string())
+        .context("Missing 'id' in Instagram response")
 }
 
-pub async fn post_to_threads(config: &MetaConfig, text: &str) -> Result<String> {
+pub async fn post_to_threads(config: &MetaConfig, post: &PostCandidate) -> Result<String> {
     let client = reqwest::Client::new();
 
     let threads_user_id = config.threads_user_id.as_deref()
         .context("threads_user_id required for Threads posting")?;
 
     let container_response = client
-        .post(format!(
-            "https://graph.threads.net/v1.0/{}/threads",
-            threads_user_id
-        ))
+        .post(format!("https://graph.threads.net/v1.0/{}/threads", threads_user_id))
         .form(&[
             ("media_type", "TEXT"),
-            ("text", text),
-            ("access_token", &config.page_access_token),
+            ("text", post.text.as_str()),
+            ("access_token", config.page_access_token.as_str()),
         ])
         .send()
         .await
@@ -119,13 +115,10 @@ pub async fn post_to_threads(config: &MetaConfig, text: &str) -> Result<String> 
         .context("Missing container ID in Threads response")?;
 
     let publish_response = client
-        .post(format!(
-            "https://graph.threads.net/v1.0/{}/threads_publish",
-            threads_user_id
-        ))
+        .post(format!("https://graph.threads.net/v1.0/{}/threads_publish", threads_user_id))
         .form(&[
             ("creation_id", container_id),
-            ("access_token", &config.page_access_token),
+            ("access_token", config.page_access_token.as_str()),
         ])
         .send()
         .await
@@ -138,27 +131,29 @@ pub async fn post_to_threads(config: &MetaConfig, text: &str) -> Result<String> 
     }
 
     let result: serde_json::Value = publish_response.json().await?;
-    let id = result["id"].as_str().context("Missing 'id' in Threads response")?;
-    Ok(id.to_string())
+    result["id"]
+        .as_str()
+        .map(|s| s.to_string())
+        .context("Missing 'id' in Threads response")
 }
 
-pub async fn post_all(config: &MetaConfig, text: &str, image_url: Option<&str>) -> Vec<(&'static str, Result<String>)> {
+pub async fn post_all(config: &MetaConfig, post: &PostCandidate) -> Vec<(&'static str, Result<String>)> {
     let mut results = Vec::new();
 
     if config.facebook_enabled {
-        results.push(("facebook", post_to_facebook(config, text).await));
+        results.push(("facebook", post_to_facebook(config, post).await));
     }
 
     if config.instagram_enabled && config.ig_user_id.is_some() {
-        if let Some(img) = image_url {
-            results.push(("instagram", post_to_instagram(config, text, img).await));
+        if post.og_image_path.is_some() {
+            results.push(("instagram", post_to_instagram(config, post).await));
         } else {
-            info!(platform = "instagram", "Skipped — no image URL available");
+            info!(platform = "instagram", "Skipped — no image available");
         }
     }
 
     if config.threads_enabled && config.threads_user_id.is_some() {
-        results.push(("threads", post_to_threads(config, text).await));
+        results.push(("threads", post_to_threads(config, post).await));
     }
 
     results

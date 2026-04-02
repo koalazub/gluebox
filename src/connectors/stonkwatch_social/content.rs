@@ -38,19 +38,34 @@ GOOD POSTS (aim for this quality):
 - "Three ASX lithium plays filed updates today. Only one had good news."#;
 
 pub struct PostCandidate {
-    pub id: String,
+    pub announcement_id: String,
+    pub symbol: String,
+    pub title: String,
+    pub ann_type: String,
+    pub importance: String,
+    pub summary: Option<String>,
+    pub link: String,
     pub text: String,
-    pub priority: f64,
-    pub image_url: Option<String>,
+    pub og_image_path: Option<String>,
 }
 
-struct AnnouncementData {
-    id: String,
-    symbol: String,
-    title: String,
-    ann_type: String,
-    importance: String,
-    summary: Option<String>,
+impl PostCandidate {
+    pub fn is_price_sensitive(&self) -> bool {
+        self.ann_type == "price_sensitive" || self.importance == "high"
+    }
+
+    pub fn og_title(&self) -> String {
+        let marker = if self.is_price_sensitive() { " ⚡" } else { "" };
+        format!("${}{} — {}", self.symbol, marker, self.title)
+    }
+
+    pub fn og_description(&self) -> String {
+        match &self.summary {
+            Some(s) if s.len() > 200 => format!("{}...", &s[..197]),
+            Some(s) => s.clone(),
+            None => format!("{} announcement from {} on ASX", self.ann_type, self.symbol),
+        }
+    }
 }
 
 pub async fn fetch_post_candidates(
@@ -60,7 +75,7 @@ pub async fn fetch_post_candidates(
 ) -> Result<Vec<PostCandidate>> {
     let cutoff = (chrono::Utc::now() - chrono::Duration::hours(24)).timestamp();
 
-    let mut rows = match conn
+    let mut rows = conn
         .query(
             "SELECT ca.id, ca.symbol, ca.title, ca.announcement_type, ca.importance,
                     ai.summary_text
@@ -71,107 +86,111 @@ pub async fn fetch_post_candidates(
              LIMIT 20",
             (cutoff,),
         )
-        .await {
-        Ok(r) => r,
-        Err(e) => {
+        .await
+        .map_err(|e| {
             tracing::error!(error = %e, url = %config.turso_url, "Turso query failed");
-            anyhow::bail!("Failed to query announcements: {}", e);
-        }
-    };
+            anyhow::anyhow!("Failed to query announcements: {}", e)
+        })?;
 
-    let mut announcements = Vec::new();
+    let llm = config.openrouter_api_key.as_ref().map(|key| OpenCodeClient::new(key));
+    let mut candidates = Vec::new();
 
-    while let Some(row) = rows.next().await
-        .context("Failed to iterate announcement rows")?
-    {
+    while let Some(row) = rows.next().await.context("Failed to iterate rows")? {
         let id = row.get_value(0).ok().and_then(|v| v.as_text().map(|s| s.to_string())).unwrap_or_default();
         if already_posted.contains(&id) {
             continue;
         }
-        announcements.push(AnnouncementData {
-            id,
-            symbol: row.get_value(1).ok().and_then(|v| v.as_text().map(|s| s.to_string())).unwrap_or_default(),
-            title: row.get_value(2).ok().and_then(|v| v.as_text().map(|s| s.to_string())).unwrap_or_default(),
-            ann_type: row.get_value(3).ok().and_then(|v| v.as_text().map(|s| s.to_string())).unwrap_or_default(),
-            importance: row.get_value(4).ok().and_then(|v| v.as_text().map(|s| s.to_string())).unwrap_or_default(),
-            summary: row.get_value(5).ok().and_then(|v| v.as_text().map(|s| s.to_string())),
-        });
-    }
 
-    if announcements.is_empty() {
-        info!("No new announcements in the last 24 hours");
-        return Ok(Vec::new());
-    }
+        let symbol = row.get_value(1).ok().and_then(|v| v.as_text().map(|s| s.to_string())).unwrap_or_default();
+        let title = row.get_value(2).ok().and_then(|v| v.as_text().map(|s| s.to_string())).unwrap_or_default();
+        let ann_type = row.get_value(3).ok().and_then(|v| v.as_text().map(|s| s.to_string())).unwrap_or_default();
+        let importance = row.get_value(4).ok().and_then(|v| v.as_text().map(|s| s.to_string())).unwrap_or_default();
+        let summary = row.get_value(5).ok().and_then(|v| v.as_text().map(|s| s.to_string()));
 
-    let llm = config.openrouter_api_key.as_ref().map(|key| OpenCodeClient::new(key));
+        let link = format!("{}/announcement/{}?utm_source=social&utm_medium=bot", APP_URL, id);
 
-    let mut candidates = Vec::new();
-
-    for ann in &announcements {
-        let is_price_sensitive = ann.ann_type == "price_sensitive" || ann.importance == "high";
-        let priority = if is_price_sensitive { 2.0 } else { 1.0 };
-        let link = format!("{}/announcement/{}?utm_source=social&utm_medium=bot", APP_URL, ann.id);
+        let is_price_sensitive = ann_type == "price_sensitive" || importance == "high";
 
         let text = if let Some(ref client) = llm {
-            match generate_post(client, ann, &link).await {
+            match generate_post(client, &symbol, &title, &ann_type, &importance, summary.as_deref(), &link).await {
                 Ok(post) => post,
                 Err(e) => {
-                    warn!(symbol = ann.symbol, error = %e, "LLM post generation failed, using fallback");
-                    fallback_post(ann, &link)
+                    warn!(symbol, error = %e, "LLM post generation failed, using fallback");
+                    fallback_post(&symbol, &title, &ann_type, is_price_sensitive, summary.as_deref(), &link)
                 }
             }
         } else {
-            fallback_post(ann, &link)
+            fallback_post(&symbol, &title, &ann_type, is_price_sensitive, summary.as_deref(), &link)
         };
 
         let og_data = super::og_image::OgCardData {
-            symbol: ann.symbol.clone(),
-            title: ann.title.clone(),
-            ann_type: ann.ann_type.clone(),
+            symbol: symbol.clone(),
+            title: title.clone(),
+            ann_type: ann_type.clone(),
             is_price_sensitive,
             sentiment: String::new(),
-            summary: ann.summary.clone().unwrap_or_default(),
-            announcement_id: ann.id.clone(),
+            summary: summary.clone().unwrap_or_default(),
+            announcement_id: id.clone(),
         };
 
-        let image_path = match super::og_image::generate_og_image(
+        let og_image_path = match super::og_image::generate_og_image(
             &og_data,
             std::path::Path::new("/var/lib/gluebox/og-images"),
-        )
-        .await
-        {
+        ).await {
             Ok(path) => Some(path.display().to_string()),
             Err(e) => {
-                warn!(symbol = ann.symbol, error = %e, "OG image generation failed");
+                warn!(symbol, error = %e, "OG image generation failed");
                 None
             }
         };
 
         candidates.push(PostCandidate {
-            id: ann.id.clone(),
+            announcement_id: id,
+            symbol,
+            title,
+            ann_type,
+            importance,
+            summary,
+            link,
             text,
-            priority,
-            image_url: image_path,
+            og_image_path,
         });
     }
 
-    candidates.sort_by(|a, b| b.priority.partial_cmp(&a.priority).unwrap_or(std::cmp::Ordering::Equal));
+    candidates.sort_by(|a, b| {
+        let pa: f64 = if a.is_price_sensitive() { 2.0 } else { 1.0 };
+        let pb: f64 = if b.is_price_sensitive() { 2.0 } else { 1.0 };
+        pb.partial_cmp(&pa).unwrap_or(std::cmp::Ordering::Equal)
+    });
 
-    info!(count = candidates.len(), "Prepared post candidates");
+    if !candidates.is_empty() {
+        info!(count = candidates.len(), "Prepared post candidates");
+    } else {
+        info!("No new announcements in the last 24 hours");
+    }
+
     Ok(candidates)
 }
 
-async fn generate_post(client: &OpenCodeClient, ann: &AnnouncementData, link: &str) -> Result<String> {
-    let is_price_sensitive = ann.ann_type == "price_sensitive" || ann.importance == "high";
+async fn generate_post(
+    client: &OpenCodeClient,
+    symbol: &str,
+    title: &str,
+    ann_type: &str,
+    importance: &str,
+    summary: Option<&str>,
+    link: &str,
+) -> Result<String> {
+    let is_price_sensitive = ann_type == "price_sensitive" || importance == "high";
     let mut context = format!(
         "Stock: ${}\nAnnouncement type: {}\nTitle: {}\nImportance: {}\nPrice sensitive: {}\nLink: {}",
-        ann.symbol, ann.ann_type, ann.title, ann.importance,
+        symbol, ann_type, title, importance,
         if is_price_sensitive { "YES" } else { "no" },
         link,
     );
 
-    if let Some(ref summary) = ann.summary {
-        context.push_str(&format!("\nAI Summary: {}", summary));
+    if let Some(s) = summary {
+        context.push_str(&format!("\nAI Summary: {}", s));
     }
 
     let user_prompt = format!(
@@ -180,7 +199,6 @@ async fn generate_post(client: &OpenCodeClient, ann: &AnnouncementData, link: &s
     );
 
     let response = client.chat(SYSTEM_PROMPT, &user_prompt, 200).await?;
-
     let post = response.trim().trim_matches('"').to_string();
 
     if post.len() > 300 {
@@ -194,30 +212,32 @@ async fn generate_post(client: &OpenCodeClient, ann: &AnnouncementData, link: &s
     Ok(post)
 }
 
-fn fallback_post(ann: &AnnouncementData, link: &str) -> String {
-    let is_price_sensitive = ann.ann_type == "price_sensitive" || ann.importance == "high";
+fn fallback_post(
+    symbol: &str,
+    title: &str,
+    ann_type: &str,
+    is_price_sensitive: bool,
+    summary: Option<&str>,
+    link: &str,
+) -> String {
     let sensitivity = if is_price_sensitive { " ⚡" } else { "" };
 
-    let title_truncated = if ann.title.len() > 100 {
-        format!("{}...", &ann.title[..97])
+    let title_truncated = if title.len() > 100 {
+        format!("{}...", &title[..97])
     } else {
-        ann.title.clone()
+        title.to_string()
     };
 
-    let header = format!("${}{} — {}", ann.symbol, sensitivity, ann.ann_type);
+    let header = format!("${}{} — {}", symbol, sensitivity, ann_type);
 
-    if let Some(ref summary_text) = ann.summary {
+    if let Some(summary_text) = summary {
         let summary_short = if summary_text.len() > 120 {
             format!("{}...", &summary_text[..117])
         } else {
-            summary_text.clone()
+            summary_text.to_string()
         };
 
-        let with_summary = format!(
-            "{}\n\n{}\n\n{}\n\n{}",
-            header, title_truncated, summary_short, link
-        );
-
+        let with_summary = format!("{}\n\n{}\n\n{}\n\n{}", header, title_truncated, summary_short, link);
         if with_summary.len() <= 300 {
             return with_summary;
         }
