@@ -36,6 +36,7 @@ GOOD POSTS (aim for this quality):
 - "$CBA dropped a price-sensitive on mortgage arrears. The numbers aren't great."
 - "Three ASX lithium plays filed updates today. Only one had good news."#;
 
+#[derive(Clone)]
 pub struct AnnouncementData {
     pub id: String,
     pub symbol: String,

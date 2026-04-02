@@ -64,9 +64,18 @@ pub async fn fetch_post_candidates(
     for ann in &announcements {
         let text = pipeline::generate_post_text(llm.as_ref(), ann).await;
 
+        let image_ann = if ann.summary.is_none() {
+            let mut enriched = ann.clone();
+            let clean_text = text.split("https://").next().unwrap_or(&text).trim();
+            enriched.summary = Some(clean_text.to_string());
+            enriched
+        } else {
+            ann.clone()
+        };
+
         let output_dir = std::path::Path::new("/var/lib/gluebox/og-images");
-        let og_image_path = pipeline::prepare_image(ann, output_dir, config.storj.as_ref()).await;
-        let story_image_path = pipeline::prepare_story_image(ann, output_dir, config.storj.as_ref()).await;
+        let og_image_path = pipeline::prepare_image(&image_ann, output_dir, config.storj.as_ref()).await;
+        let story_image_path = pipeline::prepare_story_image(&image_ann, output_dir, config.storj.as_ref()).await;
 
         candidates.push(PostCandidate {
             announcement_id: ann.id.clone(),
