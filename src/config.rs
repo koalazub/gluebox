@@ -251,10 +251,10 @@ pub struct StonkwatchSocialConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct XConfig {
-    pub api_key: String,
-    pub api_secret: String,
+    pub client_id: String,
+    pub client_secret: String,
     pub access_token: String,
-    pub access_secret: String,
+    pub refresh_token: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
