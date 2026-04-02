@@ -1,32 +1,8 @@
 use anyhow::{Context, Result};
 use chrono::Utc;
-use std::future::Future;
-use std::pin::Pin;
 use tracing::info;
 
 use crate::config::StorjConfig;
-
-pub trait ImageUploader: Send + Sync {
-    fn upload<'a>(&'a self, local_path: &'a str, object_key: &'a str) -> Pin<Box<dyn Future<Output = Result<String>> + Send + 'a>>;
-}
-
-pub struct StorjUploader {
-    config: StorjConfig,
-}
-
-impl StorjUploader {
-    pub fn new(config: StorjConfig) -> Self {
-        Self { config }
-    }
-}
-
-impl ImageUploader for StorjUploader {
-    fn upload<'a>(&'a self, local_path: &'a str, object_key: &'a str) -> Pin<Box<dyn Future<Output = Result<String>> + Send + 'a>> {
-        Box::pin(async move {
-            upload_image(&self.config, local_path, object_key).await
-        })
-    }
-}
 
 pub async fn upload_image(config: &StorjConfig, local_path: &str, object_key: &str) -> Result<String> {
     let bytes = tokio::fs::read(local_path).await

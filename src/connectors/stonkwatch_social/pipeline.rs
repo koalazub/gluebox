@@ -2,7 +2,6 @@ use anyhow::{Context, Result};
 use tracing::warn;
 
 use crate::connectors::opencode::OpenCodeClient;
-use super::platform::SocialPost;
 
 const APP_URL: &str = "https://stonkwatch.app";
 
@@ -52,18 +51,6 @@ impl AnnouncementData {
         self.ann_type == "price_sensitive" || self.importance == "high"
     }
 
-    pub fn og_title(&self) -> String {
-        let marker = if self.is_price_sensitive() { " ⚡" } else { "" };
-        format!("${}{} — {}", self.symbol, marker, self.title)
-    }
-
-    pub fn og_description(&self) -> String {
-        match &self.summary {
-            Some(s) if s.len() > 200 => format!("{}...", &s[..197]),
-            Some(s) => s.clone(),
-            None => format!("{} announcement from {} on ASX", self.ann_type, self.symbol),
-        }
-    }
 }
 
 pub async fn fetch_announcements(
@@ -230,12 +217,3 @@ pub async fn prepare_image(
     }
 }
 
-pub fn build_social_post(announcement: &AnnouncementData, text: String, image_url: Option<String>) -> SocialPost {
-    SocialPost {
-        text,
-        link: announcement.link.clone(),
-        image_url,
-        og_title: announcement.og_title(),
-        og_description: announcement.og_description(),
-    }
-}

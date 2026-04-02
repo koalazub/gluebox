@@ -134,29 +134,10 @@ impl MatrixBot {
             .await?)
     }
 
-    pub fn client(&self) -> &Client {
-        &self.client
-    }
-
-    pub fn room_id(&self) -> &OwnedRoomId {
-        &self.room_id
-    }
-
     pub async fn send_message(&self, body: &str) -> Result<()> {
         let room = self.client.get_room(&self.room_id)
             .ok_or_else(|| anyhow::anyhow!("room not found: {}", self.room_id))?;
-
         let content = RoomMessageEventContent::text_plain(body);
-        room.send(content).await?;
-        Ok(())
-    }
-
-    pub async fn send_markdown(&self, markdown: &str) -> Result<()> {
-        let room = self.client.get_room(&self.room_id)
-            .ok_or_else(|| anyhow::anyhow!("room not found: {}", self.room_id))?;
-
-        let html = markdown_to_html(markdown);
-        let content = RoomMessageEventContent::text_html(markdown, html);
         room.send(content).await?;
         Ok(())
     }
