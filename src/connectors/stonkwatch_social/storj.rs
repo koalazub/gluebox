@@ -60,7 +60,7 @@ pub async fn upload_image(config: &StorjConfig, local_path: &str, object_key: &s
         anyhow::bail!("Storj upload error {}: {}", status, body);
     }
 
-    let public_url = format!("{}/{}/{}", config.public_base_url, config.bucket, object_key);
+    let public_url = format!("{}/{}/{}/{}", config.public_base_url, config.access_key, config.bucket, object_key);
     info!(key = object_key, url = %public_url, "Uploaded OG image to Storj");
     Ok(public_url)
 }
