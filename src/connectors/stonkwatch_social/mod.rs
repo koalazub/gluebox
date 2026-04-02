@@ -30,7 +30,7 @@ const PROMO_MESSAGES: &[(&str, &str)] = &[
     ),
     (
         "New to Bluesky? Follow the ASX investing community — traders, analysts, and market watchers.\n\nhttps://bsky.app/starter-pack/stonkwatch.bsky.social",
-        "https://bsky.app/starter-pack/stonkwatch.bsky.social",
+        "https://go.bsky.app/34M6hf2",
     ),
 ];
 
