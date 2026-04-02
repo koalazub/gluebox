@@ -1,18 +1,43 @@
 use anyhow::{Context, Result};
+use std::future::Future;
+use std::pin::Pin;
 
 use crate::config::XConfig;
-use super::content::PostCandidate;
+use super::platform::{SocialPlatform, SocialPost, PostResult, check_response};
 
-pub async fn post_tweet(config: &XConfig, post: &PostCandidate) -> Result<String> {
+pub struct XPlatform {
+    config: XConfig,
+}
+
+impl XPlatform {
+    pub fn new(config: XConfig) -> Self {
+        Self { config }
+    }
+}
+
+impl SocialPlatform for XPlatform {
+    fn name(&self) -> &'static str {
+        "x"
+    }
+
+    fn publish<'a>(&'a self, post: &'a SocialPost) -> Pin<Box<dyn Future<Output = Result<PostResult>> + Send + 'a>> {
+        Box::pin(async move {
+            let id = post_tweet(&self.config, &post.text).await?;
+            Ok(PostResult { platform: "x", id })
+        })
+    }
+}
+
+pub async fn post_tweet(config: &XConfig, text: &str) -> Result<String> {
     let client = reqwest::Client::new();
 
-    let response = post_with_token(&client, &post.text, &config.access_token).await?;
+    let response = post_with_token(&client, text, &config.access_token).await?;
 
     if response.status().as_u16() == 401 {
         if let Some(ref refresh) = config.refresh_token {
             tracing::warn!(platform = "x", "Access token expired, attempting refresh");
             let new_token = refresh_access_token(&client, config, refresh).await?;
-            let retry = post_with_token(&client, &post.text, &new_token).await?;
+            let retry = post_with_token(&client, text, &new_token).await?;
             return parse_tweet_id(retry).await;
         }
         let body = response.text().await.unwrap_or_default();
@@ -36,12 +61,7 @@ async fn post_with_token(client: &reqwest::Client, text: &str, token: &str) -> R
 }
 
 async fn parse_tweet_id(response: reqwest::Response) -> Result<String> {
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("X API error {}: {}", status, body);
-    }
-
+    let response = check_response(response, "X").await?;
     let result: serde_json::Value = response.json().await?;
     result["data"]["id"]
         .as_str()
@@ -61,12 +81,7 @@ async fn refresh_access_token(client: &reqwest::Client, config: &XConfig, refres
         .await
         .context("Failed to refresh X access token")?;
 
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("X token refresh error {}: {}", status, body);
-    }
-
+    let response = check_response(response, "X token refresh").await?;
     let result: serde_json::Value = response.json().await?;
     result["access_token"]
         .as_str()

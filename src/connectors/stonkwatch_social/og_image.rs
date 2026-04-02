@@ -2,18 +2,16 @@ use anyhow::{Context, Result};
 use std::path::Path;
 use tracing::info;
 
-pub struct OgCardData {
-    pub symbol: String,
-    pub title: String,
-    pub ann_type: String,
-    pub is_price_sensitive: bool,
-    pub sentiment: String,
-    pub summary: String,
-    pub announcement_id: String,
-}
-
-pub async fn generate_og_image(data: &OgCardData, output_dir: &Path) -> Result<std::path::PathBuf> {
-    let output_path = output_dir.join(format!("{}.png", data.announcement_id));
+pub async fn generate_og_image(
+    symbol: &str,
+    title: &str,
+    ann_type: &str,
+    is_price_sensitive: bool,
+    summary: &str,
+    announcement_id: &str,
+    output_dir: &Path,
+) -> Result<std::path::PathBuf> {
+    let output_path = output_dir.join(format!("{}.png", announcement_id));
 
     if output_path.exists() {
         return Ok(output_path);
@@ -23,16 +21,16 @@ pub async fn generate_og_image(data: &OgCardData, output_dir: &Path) -> Result<s
 
     let template_path = find_template()?;
 
-    let summary_truncated = if data.summary.len() > 200 {
-        format!("{}...", &data.summary[..197])
+    let summary_truncated = if summary.len() > 200 {
+        format!("{}...", &summary[..197])
     } else {
-        data.summary.clone()
+        summary.to_string()
     };
 
-    let title_truncated = if data.title.len() > 100 {
-        format!("{}...", &data.title[..97])
+    let title_truncated = if title.len() > 100 {
+        format!("{}...", &title[..97])
     } else {
-        data.title.clone()
+        title.to_string()
     };
 
     let status = tokio::process::Command::new("typst")
@@ -40,15 +38,15 @@ pub async fn generate_og_image(data: &OgCardData, output_dir: &Path) -> Result<s
         .arg(&template_path)
         .arg(&output_path)
         .arg("--input")
-        .arg(format!("symbol={}", data.symbol))
+        .arg(format!("symbol={}", symbol))
         .arg("--input")
         .arg(format!("title={}", title_truncated))
         .arg("--input")
-        .arg(format!("type={}", data.ann_type))
+        .arg(format!("type={}", ann_type))
         .arg("--input")
-        .arg(format!("sentiment={}", data.sentiment))
+        .arg(format!("sentiment="))
         .arg("--input")
-        .arg(format!("sensitive={}", data.is_price_sensitive))
+        .arg(format!("sensitive={}", is_price_sensitive))
         .arg("--input")
         .arg(format!("summary={}", summary_truncated))
         .arg("--format")
@@ -63,7 +61,7 @@ pub async fn generate_og_image(data: &OgCardData, output_dir: &Path) -> Result<s
     }
 
     info!(
-        symbol = data.symbol,
+        symbol = symbol,
         path = %output_path.display(),
         "Generated OG image"
     );

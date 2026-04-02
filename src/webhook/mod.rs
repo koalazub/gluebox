@@ -14,7 +14,7 @@ use crate::AppState;
 use crate::triggers;
 use crate::triggers::to_matrix;
 use crate::triggers::opencode_from_registry;
-use crate::openclaw::process_feedback_clusters;
+use crate::triggers::feedback::{process_feedback_clusters, FeedbackContext};
 
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
@@ -261,18 +261,6 @@ enum NotifyFormat {
     #[default]
     Plain,
     Markdown,
-}
-
-pub struct FeedbackContext {
-    pub user: String,
-    pub user_id: String,
-    pub username: String,
-    pub submitted_at: String,
-    pub url: String,
-    pub user_agent: String,
-    pub frontend_logs: String,
-    pub backend_logs: String,
-    pub screenshot_id: String,
 }
 
 #[derive(Deserialize)]
@@ -730,6 +718,18 @@ struct SocialPostRequest {
     platforms: Option<Vec<String>>,
 }
 
+async fn connect_stonkwatch_turso(
+    social_cfg: &crate::config::StonkwatchSocialConfig,
+) -> Result<turso::Connection, StatusCode> {
+    let db = turso::sync::Builder::new_remote("/var/lib/gluebox/stonkwatch-replica")
+        .with_remote_url(&social_cfg.turso_url)
+        .with_auth_token(&social_cfg.turso_auth_token)
+        .build()
+        .await
+        .map_err(|e| { tracing::error!("Turso connect failed: {e}"); StatusCode::INTERNAL_SERVER_ERROR })?;
+    db.connect().await.map_err(|e| { tracing::error!("Turso conn failed: {e}"); StatusCode::INTERNAL_SERVER_ERROR })
+}
+
 async fn generate_social_post(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -740,13 +740,7 @@ async fn generate_social_post(
     let config = state.config.read().await;
     let social_cfg = config.stonkwatch_social.as_ref().ok_or(StatusCode::NOT_FOUND)?;
 
-    let db = turso::sync::Builder::new_remote("/var/lib/gluebox/stonkwatch-replica")
-        .with_remote_url(&social_cfg.turso_url)
-        .with_auth_token(&social_cfg.turso_auth_token)
-        .build()
-        .await
-        .map_err(|e| { tracing::error!("Turso connect failed: {e}"); StatusCode::INTERNAL_SERVER_ERROR })?;
-    let conn = db.connect().await.map_err(|e| { tracing::error!("Turso conn failed: {e}"); StatusCode::INTERNAL_SERVER_ERROR })?;
+    let conn = connect_stonkwatch_turso(social_cfg).await?;
     let empty = std::collections::HashSet::new();
 
     let candidates = crate::connectors::stonkwatch_social::content::fetch_post_candidates(&conn, social_cfg, &empty)
@@ -777,54 +771,25 @@ async fn publish_social_post(
     let config = state.config.read().await;
     let social_cfg = config.stonkwatch_social.as_ref().ok_or(StatusCode::NOT_FOUND)?;
 
-    let post = crate::connectors::stonkwatch_social::content::PostCandidate {
-        announcement_id: String::new(),
-        symbol: String::new(),
-        title: String::new(),
-        ann_type: String::new(),
-        importance: String::new(),
-        summary: None,
-        link: String::new(),
+    let social_post = crate::connectors::stonkwatch_social::platform::SocialPost {
         text: text.clone(),
-        og_image_path: None,
+        link: String::new(),
+        image_url: None,
+        og_title: String::new(),
+        og_description: String::new(),
     };
 
-    let platforms = req.platforms.unwrap_or_else(|| vec!["x".into(), "bluesky".into()]);
+    let platforms_to_use = req.platforms.unwrap_or_else(|| vec!["x".into(), "bluesky".into()]);
+    let available_platforms = crate::connectors::stonkwatch_social::StonkwatchSocialConnector::build_platforms(social_cfg);
     let mut results = serde_json::Map::new();
 
-    for platform in &platforms {
-        match platform.as_str() {
-            "x" => {
-                if let Some(ref x_cfg) = social_cfg.x {
-                    match crate::connectors::stonkwatch_social::x::post_tweet(x_cfg, &post).await {
-                        Ok(id) => { results.insert("x".into(), serde_json::json!({"ok": true, "id": id})); }
-                        Err(e) => { results.insert("x".into(), serde_json::json!({"ok": false, "error": e.to_string()})); }
-                    }
-                }
-            }
-            "bluesky" => {
-                if let Some(ref bsky_cfg) = social_cfg.bluesky {
-                    match crate::connectors::stonkwatch_social::bluesky::post_with_session(bsky_cfg, &post, &mut None).await {
-                        Ok(uri) => { results.insert("bluesky".into(), serde_json::json!({"ok": true, "uri": uri})); }
-                        Err(e) => { results.insert("bluesky".into(), serde_json::json!({"ok": false, "error": e.to_string()})); }
-                    }
-                }
-            }
-            "facebook" | "instagram" | "threads" => {
-                if let Some(ref meta_cfg) = social_cfg.meta {
-                    let result = match platform.as_str() {
-                        "facebook" => crate::connectors::stonkwatch_social::meta::post_to_facebook(meta_cfg, &post).await,
-                        "instagram" => crate::connectors::stonkwatch_social::meta::post_to_instagram(meta_cfg, &post).await,
-                        "threads" => crate::connectors::stonkwatch_social::meta::post_to_threads(meta_cfg, &post).await,
-                        _ => unreachable!(),
-                    };
-                    match result {
-                        Ok(id) => { results.insert(platform.clone(), serde_json::json!({"ok": true, "id": id})); }
-                        Err(e) => { results.insert(platform.clone(), serde_json::json!({"ok": false, "error": e.to_string()})); }
-                    }
-                }
-            }
-            _ => {}
+    for platform in &available_platforms {
+        if !platforms_to_use.iter().any(|p| p == platform.name()) {
+            continue;
+        }
+        match platform.publish(&social_post).await {
+            Ok(r) => { results.insert(r.platform.into(), serde_json::json!({"ok": true, "id": r.id})); }
+            Err(e) => { results.insert(platform.name().into(), serde_json::json!({"ok": false, "error": e.to_string()})); }
         }
     }
 
@@ -840,13 +805,7 @@ async fn generate_and_post_all(
     let config = state.config.read().await;
     let social_cfg = config.stonkwatch_social.as_ref().ok_or(StatusCode::NOT_FOUND)?;
 
-    let db = turso::sync::Builder::new_remote("/var/lib/gluebox/stonkwatch-replica")
-        .with_remote_url(&social_cfg.turso_url)
-        .with_auth_token(&social_cfg.turso_auth_token)
-        .build()
-        .await
-        .map_err(|e| { tracing::error!("Turso connect failed: {e}"); StatusCode::INTERNAL_SERVER_ERROR })?;
-    let conn = db.connect().await.map_err(|e| { tracing::error!("Turso conn failed: {e}"); StatusCode::INTERNAL_SERVER_ERROR })?;
+    let conn = connect_stonkwatch_turso(social_cfg).await?;
     let empty = std::collections::HashSet::new();
 
     let candidates = crate::connectors::stonkwatch_social::content::fetch_post_candidates(&conn, social_cfg, &empty)
@@ -857,31 +816,18 @@ async fn generate_and_post_all(
         })?;
 
     let to_post: Vec<_> = candidates.into_iter().take(5).collect();
+    let platforms = crate::connectors::stonkwatch_social::StonkwatchSocialConnector::build_platforms(social_cfg);
     let mut posted = Vec::new();
-    let mut bsky_session = None;
 
     for post in &to_post {
         let mut result = serde_json::Map::new();
         result.insert("text".into(), serde_json::json!(post.text));
 
-        if let Some(ref x_cfg) = social_cfg.x {
-            match crate::connectors::stonkwatch_social::x::post_tweet(x_cfg, post).await {
-                Ok(id) => { result.insert("x".into(), serde_json::json!(id)); }
-                Err(e) => { result.insert("x_error".into(), serde_json::json!(e.to_string())); }
-            }
-        }
-        if let Some(ref bsky_cfg) = social_cfg.bluesky {
-            match crate::connectors::stonkwatch_social::bluesky::post_with_session(bsky_cfg, post, &mut bsky_session).await {
-                Ok(uri) => { result.insert("bluesky".into(), serde_json::json!(uri)); }
-                Err(e) => { result.insert("bluesky_error".into(), serde_json::json!(e.to_string())); }
-            }
-        }
-        if let Some(ref meta_cfg) = social_cfg.meta {
-            for (platform, res) in crate::connectors::stonkwatch_social::meta::post_all(meta_cfg, post).await {
-                match res {
-                    Ok(id) => { result.insert(platform.into(), serde_json::json!(id)); }
-                    Err(e) => { result.insert(format!("{}_error", platform), serde_json::json!(e.to_string())); }
-                }
+        let social_post = post.to_social_post();
+        for platform in &platforms {
+            match platform.publish(&social_post).await {
+                Ok(r) => { result.insert(r.platform.into(), serde_json::json!(r.id)); }
+                Err(e) => { result.insert(format!("{}_error", platform.name()), serde_json::json!(e.to_string())); }
             }
         }
 

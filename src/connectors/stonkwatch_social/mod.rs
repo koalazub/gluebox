@@ -4,6 +4,8 @@ pub mod storj;
 pub mod x;
 pub mod bluesky;
 pub mod meta;
+pub mod platform;
+pub mod pipeline;
 
 use std::any::Any;
 use std::collections::HashSet;
@@ -15,6 +17,7 @@ use tracing::{error, info, warn};
 
 use crate::connector::{Connector, ConnectorStatus};
 use crate::config::StonkwatchSocialConfig;
+use platform::{SocialPlatform, SocialPost};
 
 pub struct StonkwatchSocialConnector {
     config: Mutex<StonkwatchSocialConfig>,
@@ -33,10 +36,37 @@ impl StonkwatchSocialConnector {
         }
     }
 
+    pub fn build_platforms(config: &StonkwatchSocialConfig) -> Vec<Box<dyn SocialPlatform>> {
+        let mut platforms: Vec<Box<dyn SocialPlatform>> = Vec::new();
+
+        if let Some(ref x_cfg) = config.x {
+            platforms.push(Box::new(x::XPlatform::new(x_cfg.clone())));
+        }
+
+        if let Some(ref bsky_cfg) = config.bluesky {
+            platforms.push(Box::new(bluesky::BlueskyPlatform::new(bsky_cfg.clone())));
+        }
+
+        if let Some(ref meta_cfg) = config.meta {
+            if meta_cfg.facebook_enabled {
+                platforms.push(Box::new(meta::FacebookPlatform::new(meta_cfg.clone())));
+            }
+            if meta_cfg.instagram_enabled && meta_cfg.ig_user_id.is_some() {
+                platforms.push(Box::new(meta::InstagramPlatform::new(meta_cfg.clone())));
+            }
+            if meta_cfg.threads_enabled && meta_cfg.threads_user_id.is_some() {
+                platforms.push(Box::new(meta::ThreadsPlatform::new(meta_cfg.clone())));
+            }
+        }
+
+        platforms
+    }
+
     async fn run_posting_loop(config: StonkwatchSocialConfig) {
         let interval_secs = config.post_interval_secs.unwrap_or(14400);
+        let platforms = Self::build_platforms(&config);
 
-        Self::log_platform_status(&config);
+        Self::log_platform_status(&platforms, &config);
 
         let db = match turso::sync::Builder::new_remote("/var/lib/gluebox/stonkwatch-replica")
             .with_remote_url(&config.turso_url)
@@ -54,7 +84,6 @@ impl StonkwatchSocialConnector {
         info!(url = %config.turso_url, "Connected to Stonkwatch Turso DB");
 
         let mut posted_ids: HashSet<String> = HashSet::new();
-        let mut bsky_session: Option<bluesky::CachedSession> = None;
 
         loop {
             info!("Stonkwatch social: checking for content to post");
@@ -76,7 +105,8 @@ impl StonkwatchSocialConnector {
                     } else if config.auto_post {
                         info!("Auto-posting {} updates across platforms", to_post.len());
                         for post in &to_post {
-                            Self::post_to_all_platforms(&config, post, &mut bsky_session).await;
+                            let social_post = post.to_social_post();
+                            Self::post_to_all_platforms(&platforms, &social_post).await;
                             posted_ids.insert(post.announcement_id.clone());
                             tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                         }
@@ -109,24 +139,21 @@ impl StonkwatchSocialConnector {
         }
     }
 
-    fn log_platform_status(config: &StonkwatchSocialConfig) {
-        if config.x.is_some() {
-            info!(platform = "x", "Configured");
-        } else {
+    fn log_platform_status(platforms: &[Box<dyn SocialPlatform>], config: &StonkwatchSocialConfig) {
+        for p in platforms {
+            info!(platform = p.name(), "Configured");
+        }
+
+        if config.x.is_none() {
             warn!(platform = "x", "Not configured — posts will be skipped");
         }
-        if config.bluesky.is_some() {
-            info!(platform = "bluesky", "Configured");
-        } else {
+        if config.bluesky.is_none() {
             warn!(platform = "bluesky", "Not configured — posts will be skipped");
         }
-        if let Some(ref meta) = config.meta {
-            if meta.facebook_enabled { info!(platform = "facebook", "Configured via Meta"); }
-            if meta.instagram_enabled && meta.ig_user_id.is_some() { info!(platform = "instagram", "Configured via Meta"); }
-            if meta.threads_enabled && meta.threads_user_id.is_some() { info!(platform = "threads", "Configured via Meta"); }
-        } else {
+        if config.meta.is_none() {
             warn!(platform = "meta", "Not configured — Facebook/Instagram/Threads will be skipped");
         }
+
         if config.auto_post {
             info!("Auto-post enabled");
         } else if config.review_room_id.is_some() {
@@ -167,30 +194,13 @@ impl StonkwatchSocialConnector {
     }
 
     async fn post_to_all_platforms(
-        config: &StonkwatchSocialConfig,
-        post: &content::PostCandidate,
-        bsky_session: &mut Option<bluesky::CachedSession>,
+        platforms: &[Box<dyn SocialPlatform>],
+        post: &SocialPost,
     ) {
-        if let Some(ref x_cfg) = config.x {
-            match x::post_tweet(x_cfg, post).await {
-                Ok(id) => info!(platform = "x", tweet_id = %id, "Posted"),
-                Err(e) => error!(platform = "x", error = %e, "Failed to post"),
-            }
-        }
-
-        if let Some(ref bsky_cfg) = config.bluesky {
-            match bluesky::post_with_session(bsky_cfg, post, bsky_session).await {
-                Ok(uri) => info!(platform = "bluesky", uri = %uri, "Posted"),
-                Err(e) => error!(platform = "bluesky", error = %e, "Failed to post"),
-            }
-        }
-
-        if let Some(ref meta_cfg) = config.meta {
-            for (platform, result) in meta::post_all(meta_cfg, post).await {
-                match result {
-                    Ok(id) => info!(%platform, post_id = %id, "Posted"),
-                    Err(e) => error!(%platform, error = %e, "Failed to post"),
-                }
+        for platform in platforms {
+            match platform.publish(post).await {
+                Ok(result) => info!(platform = result.platform, id = %result.id, "Posted"),
+                Err(e) => error!(platform = platform.name(), error = %e, "Failed to post"),
             }
         }
     }

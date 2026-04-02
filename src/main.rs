@@ -5,7 +5,6 @@ mod db;
 mod connectors;
 mod triggers;
 mod webhook;
-mod openclaw;
 mod connector;
 mod registry;
 mod daemon;
@@ -168,16 +167,6 @@ async fn main() -> anyhow::Result<()> {
                     }
                 }
             });
-
-            if let Some(matrix_conn) = registry.get_dyn("matrix").await {
-                let matrix_connector = matrix_conn
-                    .as_any()
-                    .downcast_ref::<connectors::matrix::MatrixConnector>()
-                    .expect("registry 'matrix' entry is not MatrixConnector");
-                let bot = matrix_connector.bot().await?;
-                let openclaw_state = state.clone();
-                tokio::spawn(openclaw::start_openclaw(openclaw_state, bot));
-            }
 
             let sighup_state = state.clone();
             tokio::spawn(async move {
