@@ -53,6 +53,7 @@ impl StonkwatchSocialConnector {
             }
             if meta_cfg.instagram_enabled && meta_cfg.ig_user_id.is_some() {
                 platforms.push(Box::new(meta::InstagramPlatform::new(meta_cfg.clone())));
+                platforms.push(Box::new(meta::InstagramStoryPlatform::new(meta_cfg.clone())));
             }
             if meta_cfg.threads_enabled && meta_cfg.threads_user_id.is_some() {
                 platforms.push(Box::new(meta::ThreadsPlatform::new(meta_cfg.clone())));
