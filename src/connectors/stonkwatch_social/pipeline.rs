@@ -217,3 +217,38 @@ pub async fn prepare_image(
     }
 }
 
+pub async fn prepare_story_image(
+    announcement: &AnnouncementData,
+    output_dir: &std::path::Path,
+    storj_config: Option<&crate::config::StorjConfig>,
+) -> Option<String> {
+    match super::og_image::generate_story_image(
+        &announcement.symbol,
+        &announcement.title,
+        &announcement.ann_type,
+        announcement.is_price_sensitive(),
+        announcement.summary.as_deref().unwrap_or_default(),
+        &announcement.id,
+        &announcement.link,
+        output_dir,
+    ).await {
+        Ok(local_path) => {
+            if let Some(storj_cfg) = storj_config {
+                let object_key = format!("og/{}-story.png", announcement.id);
+                match super::storj::upload_image(storj_cfg, &local_path.display().to_string(), &object_key).await {
+                    Ok(public_url) => Some(public_url),
+                    Err(e) => {
+                        warn!(symbol = announcement.symbol, error = %e, "Storj story upload failed");
+                        None
+                    }
+                }
+            } else {
+                Some(local_path.display().to_string())
+            }
+        }
+        Err(e) => {
+            warn!(symbol = announcement.symbol, error = %e, "Story image generation failed");
+            None
+        }
+    }
+}

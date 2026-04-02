@@ -155,22 +155,17 @@ impl SocialPlatform for InstagramStoryPlatform {
             let ig_user_id = self.config.ig_user_id.as_deref()
                 .context("ig_user_id required for Instagram Stories")?;
 
-            let image_url = post.image_url.as_deref()
+            let image_url = post.story_image_url.as_deref()
+                .or(post.image_url.as_deref())
                 .context("Instagram Stories requires a public image URL")?;
-
-            let mut params = vec![
-                ("image_url", image_url.to_string()),
-                ("media_type", "STORIES".to_string()),
-                ("access_token", self.config.page_access_token.clone()),
-            ];
-
-            if !post.link.is_empty() {
-                params.push(("link", post.link.clone()));
-            }
 
             let container_response = client
                 .post(format!("https://graph.facebook.com/v25.0/{}/media", ig_user_id))
-                .form(&params)
+                .form(&[
+                    ("image_url", image_url),
+                    ("media_type", "STORIES"),
+                    ("access_token", self.config.page_access_token.as_str()),
+                ])
                 .send()
                 .await
                 .context("Failed to create Instagram Story container")?;
@@ -228,12 +223,15 @@ impl SocialPlatform for ThreadsPlatform {
             let threads_user_id = self.config.threads_user_id.as_deref()
                 .context("threads_user_id required for Threads posting")?;
 
+            let threads_token = self.config.threads_access_token.as_deref()
+                .unwrap_or(&self.config.page_access_token);
+
             let container_response = client
                 .post(format!("https://graph.threads.net/v1.0/{}/threads", threads_user_id))
                 .form(&[
                     ("media_type", "TEXT"),
                     ("text", post.text.as_str()),
-                    ("access_token", self.config.page_access_token.as_str()),
+                    ("access_token", threads_token),
                 ])
                 .send()
                 .await
@@ -250,7 +248,7 @@ impl SocialPlatform for ThreadsPlatform {
                 .post(format!("https://graph.threads.net/v1.0/{}/threads_publish", threads_user_id))
                 .form(&[
                     ("creation_id", container_id.as_str()),
-                    ("access_token", self.config.page_access_token.as_str()),
+                    ("access_token", threads_token),
                 ])
                 .send()
                 .await

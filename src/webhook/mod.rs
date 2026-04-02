@@ -775,6 +775,7 @@ async fn publish_social_post(
         text: text.clone(),
         link: String::new(),
         image_url: None,
+        story_image_url: None,
         og_title: String::new(),
         og_description: String::new(),
     };

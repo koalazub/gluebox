@@ -295,6 +295,7 @@ pub struct MetaConfig {
     pub page_id: String,
     pub ig_user_id: Option<String>,
     pub threads_user_id: Option<String>,
+    pub threads_access_token: Option<String>,
     #[serde(default = "default_true")]
     pub facebook_enabled: bool,
     #[serde(default = "default_true")]

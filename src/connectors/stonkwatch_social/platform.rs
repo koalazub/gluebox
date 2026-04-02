@@ -6,6 +6,7 @@ pub struct SocialPost {
     pub text: String,
     pub link: String,
     pub image_url: Option<String>,
+    pub story_image_url: Option<String>,
     pub og_title: String,
     pub og_description: String,
 }

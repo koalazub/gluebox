@@ -198,6 +198,7 @@ mod tests {
             text: text.into(),
             link: link.into(),
             image_url: None,
+            story_image_url: None,
             og_title: "$BHP ⚡ — Iron Ore Quarterly Update".into(),
             og_description: "BHP reported record iron ore output, beating estimates by 12%".into(),
         }

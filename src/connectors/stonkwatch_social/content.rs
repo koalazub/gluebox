@@ -16,6 +16,7 @@ pub struct PostCandidate {
     pub link: String,
     pub text: String,
     pub og_image_path: Option<String>,
+    pub story_image_path: Option<String>,
 }
 
 impl PostCandidate {
@@ -41,6 +42,7 @@ impl PostCandidate {
             text: self.text.clone(),
             link: self.link.clone(),
             image_url: self.og_image_path.clone(),
+            story_image_url: self.story_image_path.clone(),
             og_title: self.og_title(),
             og_description: self.og_description(),
         }
@@ -62,11 +64,9 @@ pub async fn fetch_post_candidates(
     for ann in &announcements {
         let text = pipeline::generate_post_text(llm.as_ref(), ann).await;
 
-        let og_image_path = pipeline::prepare_image(
-            ann,
-            std::path::Path::new("/var/lib/gluebox/og-images"),
-            config.storj.as_ref(),
-        ).await;
+        let output_dir = std::path::Path::new("/var/lib/gluebox/og-images");
+        let og_image_path = pipeline::prepare_image(ann, output_dir, config.storj.as_ref()).await;
+        let story_image_path = pipeline::prepare_story_image(ann, output_dir, config.storj.as_ref()).await;
 
         candidates.push(PostCandidate {
             announcement_id: ann.id.clone(),
@@ -78,6 +78,7 @@ pub async fn fetch_post_candidates(
             link: ann.link.clone(),
             text,
             og_image_path,
+            story_image_path,
         });
     }
 
