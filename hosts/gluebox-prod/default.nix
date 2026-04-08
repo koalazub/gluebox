@@ -19,6 +19,7 @@ in
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMkn5pAtft3oahcYHzXtgURz6g+cUZbS9euMgAHarF+8 koalazub@KoalaBook.local"
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHRZighEl9bRZUwPGkIefAFmi1y8L6tSSkv8+zUXMVp7 koalazub@KoalaBook.local-2026"
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICoZ6NjPAXJJCt/Doqlg1rlrrkIIdCYMcg90CHbK2wfl gluebox-deploy"
+    "ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBExIAAQ51kcUa02F73izB9v8Hlp7f4RUSrGQWgQgtp35daM9qfQtBDzjojucOwwjdREhtMfewVeCI3eGxffFPys= gluebox-nixos@secretive.KoalaBook.local"
   ];
 
   services.openssh = {
