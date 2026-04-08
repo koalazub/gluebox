@@ -94,6 +94,8 @@ in
   environment.etc."gluebox/og-card.typ".source = ../../assets/og-card.typ;
   environment.etc."gluebox/story-card.typ".source = ../../assets/story-card.typ;
 
+  fonts.packages = [ pkgs.jetbrains-mono ];
+
   environment.systemPackages = with pkgs; [
     curl
     htop

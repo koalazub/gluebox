@@ -1,5 +1,5 @@
 #set page(width: 1200pt, height: 630pt, margin: 0pt)
-#set text(font: "JetBrains Mono", fill: rgb("#e0e0e0"))
+#set text(font: ("JetBrains Mono", "JetBrainsMono NF", "DejaVu Sans Mono"), fill: rgb("#e0e0e0"))
 
 #let bg = rgb("#0a0a0a")
 #let surface = rgb("#141414")
@@ -85,7 +85,7 @@
           stroke: (left: 3pt + green),
         )[
           #text(size: 16pt, fill: rgb("#cccccc"))[
-            New #ann-type announcement from $#symbol on the ASX. Read the full AI analysis on Stonkwatch.
+            New #ann-type announcement from \$#symbol on the ASX. Read the full AI analysis on Stonkwatch.
           ]
         ]
       ]

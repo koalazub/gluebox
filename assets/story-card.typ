@@ -1,5 +1,5 @@
 #set page(width: 1080pt, height: 1920pt, margin: 0pt)
-#set text(font: "JetBrains Mono", fill: rgb("#e0e0e0"))
+#set text(font: ("JetBrains Mono", "JetBrainsMono NF", "DejaVu Sans Mono"), fill: rgb("#e0e0e0"))
 
 #let bg = rgb("#0a0a0a")
 #let surface = rgb("#141414")
