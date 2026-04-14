@@ -268,7 +268,7 @@ version = "2.3.2"
 version = "0.2.16"
 
 [dependencies.rand]
-version = "0.8.5"
+version = "0.9.3"
 optional = true
 
 [dependencies.ruma]
