@@ -64,3 +64,37 @@ struct DaemonMessage {
     response @3 :CommandResponse;
   }
 }
+
+struct Tool {
+  name @0 :Text;
+  description @1 :Text;
+  example @2 :Text;
+}
+
+struct Capabilities {
+  tools @0 :List(Tool);
+  version @1 :Text;
+}
+
+struct RunResult {
+  stdout @0 :Text;
+  stderr @1 :Text;
+  exitCode @2 :Int32;
+}
+
+struct GatewayCommand {
+  id @0 :UInt32;
+  union {
+    getCapabilities @1 :Void;
+    run @2 :Text;
+  }
+}
+
+struct GatewayResponse {
+  id @0 :UInt32;
+  union {
+    capabilities @1 :Capabilities;
+    result @2 :RunResult;
+    error @3 :Text;
+  }
+}
