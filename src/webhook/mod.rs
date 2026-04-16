@@ -22,6 +22,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/webhooks/linear", post(handle_linear))
         .route("/webhooks/documenso", post(handle_documenso))
         .route("/webhooks/github", post(handle_github))
+        .route("/webhooks/trending", post(handle_trending))
         .route("/api/notify", post(handle_notify))
         .route("/api/feedback", post(handle_feedback))
         .route("/admin/status", get(admin_status))
@@ -440,6 +441,73 @@ async fn handle_notify(
             StatusCode::INTERNAL_SERVER_ERROR
         }
     }
+}
+
+#[derive(Deserialize)]
+struct TrendingEntity {
+    entity_type: String,
+    entity_id: String,
+    #[serde(default)]
+    #[allow(dead_code)]
+    membrane_potential: Option<f64>,
+}
+
+#[derive(Deserialize)]
+struct TrendingWebhookPayload {
+    entities: Vec<TrendingEntity>,
+}
+
+#[derive(Serialize)]
+struct TrendingWebhookResponse {
+    received: usize,
+    posted: usize,
+    skipped: usize,
+}
+
+async fn handle_trending(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(req): Json<TrendingWebhookPayload>,
+) -> Result<Json<TrendingWebhookResponse>, StatusCode> {
+    state.power.spike();
+
+    let notify_secret = {
+        let cfg = state.config.read().await;
+        let Some(ref secret) = cfg.notify_secret else {
+            tracing::warn!("trending webhook called but notify_secret not configured");
+            return Err(StatusCode::NOT_FOUND);
+        };
+        secret.clone()
+    };
+
+    let provided = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .unwrap_or("");
+
+    if !verify::constant_time_eq_pub(provided.as_bytes(), notify_secret.as_bytes()) {
+        tracing::warn!("trending webhook: invalid bearer token");
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+
+    let received = req.entities.len();
+    let mut posted = 0usize;
+    let mut skipped = 0usize;
+
+    for entity in req.entities {
+        match triggers::handle_trending_entity(&state, &entity.entity_type, &entity.entity_id).await {
+            Ok(triggers::TrendingDecision::Posted { .. }) => posted += 1,
+            Ok(triggers::TrendingDecision::Skipped(_)) => skipped += 1,
+            Err(e) => {
+                tracing::warn!(entity_id = %entity.entity_id, error = %e, "trending webhook: entity handler failed");
+                skipped += 1;
+            }
+        }
+    }
+
+    tracing::info!(received, posted, skipped, "trending webhook processed");
+    Ok(Json(TrendingWebhookResponse { received, posted, skipped }))
 }
 
 async fn check_admin_auth(state: &Arc<AppState>, headers: &HeaderMap) -> Result<(), StatusCode> {

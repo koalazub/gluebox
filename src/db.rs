@@ -54,6 +54,15 @@ pub struct GithubLinearMapping {
     pub linear_issue_url: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct TrendingPost {
+    pub ticker: String,
+    pub posted_at: i64,
+    pub post_type: String,
+    pub announcement_id: Option<String>,
+    pub stonkwatch_link: String,
+}
+
 fn text(row: &turso::Row, idx: usize) -> String {
     row.get_value(idx)
         .ok()
@@ -180,6 +189,16 @@ impl Db {
                 affine_doc_id TEXT,
                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
             )",
+            "CREATE TABLE IF NOT EXISTS trending_posts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ticker TEXT NOT NULL,
+                posted_at INTEGER NOT NULL,
+                post_type TEXT NOT NULL,
+                announcement_id TEXT,
+                stonkwatch_link TEXT NOT NULL
+            )",
+            "CREATE INDEX IF NOT EXISTS idx_trending_posts_ticker_time ON trending_posts(ticker, posted_at DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_trending_posts_time ON trending_posts(posted_at DESC)",
             "CREATE INDEX IF NOT EXISTS idx_spec_anytype ON spec_mappings(anytype_object_id)",
             "CREATE INDEX IF NOT EXISTS idx_contract_anytype ON contract_mappings(anytype_object_id)",
             "CREATE INDEX IF NOT EXISTS idx_contract_linear ON contract_mappings(linear_issue_id)",
@@ -511,6 +530,45 @@ impl Db {
             (period, affine_doc_id.unwrap_or("")),
         ).await.map_err(|e| anyhow::anyhow!("{}", e))?;
         Ok(())
+    }
+
+    pub async fn record_trending_post(&self, post: &TrendingPost) -> anyhow::Result<()> {
+        self.conn().await?.execute(
+            "INSERT INTO trending_posts (ticker, posted_at, post_type, announcement_id, stonkwatch_link)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            (
+                post.ticker.as_str(),
+                post.posted_at,
+                post.post_type.as_str(),
+                post.announcement_id.as_deref().unwrap_or(""),
+                post.stonkwatch_link.as_str(),
+            ),
+        ).await.map_err(|e| anyhow::anyhow!("{}", e))?;
+        Ok(())
+    }
+
+    pub async fn trending_posts_in_last_24h(&self) -> anyhow::Result<i64> {
+        let conn = self.conn().await?;
+        let mut rows = conn.query(
+            "SELECT COUNT(*) FROM trending_posts WHERE posted_at >= ?1",
+            (chrono::Utc::now().timestamp() - 86400,),
+        ).await.map_err(|e| anyhow::anyhow!("{}", e))?;
+        match rows.next().await.map_err(|e| anyhow::anyhow!("{}", e))? {
+            Some(row) => Ok(int(&row, 0)),
+            None => Ok(0),
+        }
+    }
+
+    pub async fn last_trending_post_for_ticker(&self, ticker: &str) -> anyhow::Result<Option<i64>> {
+        let conn = self.conn().await?;
+        let mut rows = conn.query(
+            "SELECT posted_at FROM trending_posts WHERE ticker = ?1 ORDER BY posted_at DESC LIMIT 1",
+            (ticker,),
+        ).await.map_err(|e| anyhow::anyhow!("{}", e))?;
+        match rows.next().await.map_err(|e| anyhow::anyhow!("{}", e))? {
+            Some(row) => Ok(Some(int(&row, 0))),
+            None => Ok(None),
+        }
     }
 
     #[cfg(test)]

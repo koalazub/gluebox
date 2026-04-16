@@ -270,11 +270,21 @@ pub struct StonkwatchSocialConfig {
     #[serde(default)]
     pub auto_post: bool,
     pub review_room_id: Option<String>,
+    #[serde(default = "default_max_posts_per_cycle")]
+    pub max_posts_per_cycle: u32,
+    #[serde(default = "default_trending_only")]
+    pub trending_only: bool,
+    #[serde(default = "default_trending_webhook_driven")]
+    pub trending_webhook_driven: bool,
     pub x: Option<XConfig>,
     pub bluesky: Option<BlueskyConfig>,
     pub meta: Option<MetaConfig>,
     pub storj: Option<StorjConfig>,
 }
+
+fn default_max_posts_per_cycle() -> u32 { 1 }
+fn default_trending_only() -> bool { true }
+fn default_trending_webhook_driven() -> bool { true }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct StorjConfig {

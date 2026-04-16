@@ -103,6 +103,49 @@ pub async fn fetch_announcements(
     Ok(announcements)
 }
 
+pub async fn fetch_latest_for_ticker(
+    conn: &turso::Connection,
+    ticker: &str,
+    max_age_secs: i64,
+) -> Result<Option<AnnouncementData>> {
+    let cutoff = chrono::Utc::now().timestamp() - max_age_secs;
+    let mut rows = conn
+        .query(
+            "SELECT ca.id, ca.symbol, ca.title, ca.announcement_type, ca.importance,
+                    ai.summary_text
+             FROM company_announcements ca
+             LEFT JOIN ai_summaries ai ON ca.id = ai.announcement_id
+             WHERE ca.symbol = ?1 AND ca.published_at >= ?2
+             ORDER BY ca.importance DESC, ca.published_at DESC
+             LIMIT 1",
+            (ticker, cutoff),
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to query announcement for ticker {ticker}: {e}"))?;
+
+    let Some(row) = rows.next().await.context("row iter failed")? else {
+        return Ok(None);
+    };
+
+    let id = row.get_value(0).ok().and_then(|v| v.as_text().map(|s| s.to_string())).unwrap_or_default();
+    let symbol = row.get_value(1).ok().and_then(|v| v.as_text().map(|s| s.to_string())).unwrap_or_default();
+    let title = row.get_value(2).ok().and_then(|v| v.as_text().map(|s| s.to_string())).unwrap_or_default();
+    let ann_type = row.get_value(3).ok().and_then(|v| v.as_text().map(|s| s.to_string())).unwrap_or_default();
+    let importance = row.get_value(4).ok().and_then(|v| v.as_text().map(|s| s.to_string())).unwrap_or_default();
+    let summary = row.get_value(5).ok().and_then(|v| v.as_text().map(|s| s.to_string()));
+    let link = format!("{}/announcement/{}", APP_URL, id);
+
+    Ok(Some(AnnouncementData {
+        id,
+        symbol,
+        title,
+        ann_type,
+        importance,
+        summary,
+        link,
+    }))
+}
+
 pub async fn generate_post_text(
     llm: Option<&OpenCodeClient>,
     announcement: &AnnouncementData,

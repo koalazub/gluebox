@@ -6,11 +6,13 @@ mod linear_to_github;
 pub mod study_plan;
 pub mod feedback;
 pub mod lecture_recorded;
+pub mod trending_to_social;
 
 pub use linear_to_anytype::{linear_issue_created, linear_issue_updated};
 pub use documenso_handlers::{documenso_completed, documenso_rejected};
 pub use github_to_linear::github_issue_opened;
 pub use linear_to_github::linear_issue_github_sync;
+pub use trending_to_social::{handle_trending_entity, TrendingDecision};
 
 use std::sync::Arc;
 use crate::AppState;
