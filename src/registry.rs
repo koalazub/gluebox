@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -6,12 +6,14 @@ use crate::connector::{Connector, ConnectorStatus};
 
 pub struct ConnectorRegistry {
     connectors: RwLock<HashMap<String, Arc<dyn Connector>>>,
+    auto_suspended: RwLock<HashSet<String>>,
 }
 
 impl ConnectorRegistry {
     pub fn new() -> Self {
         Self {
             connectors: RwLock::new(HashMap::new()),
+            auto_suspended: RwLock::new(HashSet::new()),
         }
     }
 
@@ -56,10 +58,14 @@ impl ConnectorRegistry {
 
     pub async fn suspend_all(&self) {
         let lock = self.connectors.read().await;
+        let mut suspended = self.auto_suspended.write().await;
         for (name, conn) in lock.iter() {
             if let ConnectorStatus::Running = conn.status() {
-                if let Err(e) = conn.suspend().await {
-                    tracing::error!("failed to suspend {name}: {e}");
+                match conn.suspend().await {
+                    Ok(()) => {
+                        suspended.insert(name.clone());
+                    }
+                    Err(e) => tracing::error!("failed to suspend {name}: {e}"),
                 }
             }
         }
@@ -67,13 +73,15 @@ impl ConnectorRegistry {
 
     pub async fn resume_all(&self) {
         let lock = self.connectors.read().await;
-        for (name, conn) in lock.iter() {
-            if let ConnectorStatus::Suspended = conn.status() {
+        let mut suspended = self.auto_suspended.write().await;
+        for name in suspended.iter() {
+            if let Some(conn) = lock.get(name) {
                 if let Err(e) = conn.resume().await {
                     tracing::error!("failed to resume {name}: {e}");
                 }
             }
         }
+        suspended.clear();
     }
 
     pub async fn stop_all(&self) {
@@ -232,14 +240,43 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn resume_all_resumes_suspended() {
+    async fn suspend_all_then_resume_all_restarts_connector() {
         let registry = ConnectorRegistry::new();
         let conn = Arc::new(TestConnector::new("test"));
         registry.register("test".into(), conn.clone()).await.unwrap();
+        assert!(matches!(conn.status(), ConnectorStatus::Running));
+
         registry.suspend_all().await;
         assert!(matches!(conn.status(), ConnectorStatus::Stopped));
-        conn.status.store(2, Ordering::SeqCst);
+
         registry.resume_all().await;
         assert!(matches!(conn.status(), ConnectorStatus::Running));
+    }
+
+    #[tokio::test]
+    async fn resume_all_does_not_restart_manually_stopped_connector() {
+        let registry = ConnectorRegistry::new();
+        let conn = Arc::new(TestConnector::new("test"));
+        registry.register("test".into(), conn.clone()).await.unwrap();
+
+        conn.stop().await.unwrap();
+        assert!(matches!(conn.status(), ConnectorStatus::Stopped));
+
+        registry.resume_all().await;
+        assert!(matches!(conn.status(), ConnectorStatus::Stopped));
+    }
+
+    #[tokio::test]
+    async fn repeated_suspend_resume_cycles_stay_consistent() {
+        let registry = ConnectorRegistry::new();
+        let conn = Arc::new(TestConnector::new("test"));
+        registry.register("test".into(), conn.clone()).await.unwrap();
+
+        for _ in 0..3 {
+            registry.suspend_all().await;
+            assert!(matches!(conn.status(), ConnectorStatus::Stopped));
+            registry.resume_all().await;
+            assert!(matches!(conn.status(), ConnectorStatus::Running));
+        }
     }
 }

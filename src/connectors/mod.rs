@@ -5,7 +5,6 @@ pub mod documenso;
 pub mod opencode;
 pub mod github;
 pub mod affine;
-pub mod char_sessions;
 pub mod calendar;
-pub mod session_watcher;
 pub mod stonkwatch_social;
+pub mod samaya;

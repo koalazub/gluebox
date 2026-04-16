@@ -108,14 +108,18 @@ pub async fn linear_issue_updated(state: &Arc<AppState>, payload: &Value) -> any
         if stype == "completed" || current_state == Some("Shipped") || current_state == Some("Done") {
             let issue_title = title.unwrap_or("(untitled)");
             let linear_url = payload["url"].as_str().unwrap_or("");
-            to_matrix::notify_matrix(state, &format!("Shipped: {issue_title}\n{linear_url}")).await;
-            tracing::info!(issue_id, "shipped notification sent to matrix");
+            match to_matrix::notify_matrix(state, &format!("Shipped: {issue_title}\n{linear_url}")).await {
+                Ok(()) => tracing::info!(issue_id, "shipped notification sent to matrix"),
+                Err(e) => tracing::warn!(issue_id, %e, "failed to send shipped notification to matrix"),
+            }
         }
 
         if current_state == Some("In Progress") || current_state == Some("In Review") {
             let issue_title = title.unwrap_or("(untitled)");
             let linear_url = payload["url"].as_str().unwrap_or("");
-            to_matrix::notify_matrix(state, &format!("{}: {issue_title}\n{linear_url}", current_state.unwrap_or("Updated"))).await;
+            if let Err(e) = to_matrix::notify_matrix(state, &format!("{}: {issue_title}\n{linear_url}", current_state.unwrap_or("Updated"))).await {
+                tracing::warn!(issue_id, %e, "failed to send status notification to matrix");
+            }
         }
     }
 

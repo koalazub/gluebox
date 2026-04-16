@@ -3,7 +3,13 @@ use std::path::Path;
 use chrono::{DateTime, Duration, Utc};
 use serde::Deserialize;
 
-use super::char_sessions::SessionMeta;
+/// Minimal session metadata for calendar matching.
+#[derive(Debug, Clone)]
+pub struct SessionMeta {
+    pub id: String,
+    pub title: String,
+    pub created_at: DateTime<Utc>,
+}
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct CharCalendar {

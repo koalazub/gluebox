@@ -68,12 +68,12 @@ in
     after = [ "network-online.target" "redis.service" ];
     wants = [ "network-online.target" ];
     wantedBy = [ "multi-user.target" ];
+    unitConfig.StartLimitIntervalSec = 0;
     serviceConfig = {
       Type = "simple";
       ExecStart = "${glueboxPkg}/bin/gluebox";
       Restart = "always";
       RestartSec = 30;
-      StartLimitIntervalSec = 0;
       StateDirectory = "gluebox";
     };
     path = [ pkgs.typst ];
@@ -94,6 +94,10 @@ in
 
   environment.etc."gluebox/og-card.typ".source = ../../assets/og-card.typ;
   environment.etc."gluebox/story-card.typ".source = ../../assets/story-card.typ;
+
+  systemd.tmpfiles.rules = [
+    "z /etc/gluebox/gluebox.toml 0600 root root -"
+  ];
 
   fonts.packages = [ pkgs.jetbrains-mono ];
 

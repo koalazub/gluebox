@@ -3,9 +3,9 @@ pub(crate) mod to_matrix;
 mod documenso_handlers;
 mod github_to_linear;
 mod linear_to_github;
-pub mod session_import;
 pub mod study_plan;
 pub mod feedback;
+pub mod lecture_recorded;
 
 pub use linear_to_anytype::{linear_issue_created, linear_issue_updated};
 pub use documenso_handlers::{documenso_completed, documenso_rejected};

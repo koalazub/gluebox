@@ -2,19 +2,24 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-fn default_sessions_dir() -> PathBuf {
+fn default_samaya_binary() -> String {
+    "samaya".to_string()
+}
+fn default_calendar_name() -> String {
+    "Uni".to_string()
+}
+fn default_match_keywords() -> Vec<String> {
+    vec!["lecture".into(), "tutorial".into(), "seminar".into()]
+}
+fn default_samaya_output_dir() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-    PathBuf::from(home).join("Library/Application Support/hyprnote/sessions")
+    PathBuf::from(home).join("Documents/samaya-recordings")
 }
-fn default_hyprnote_dir() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-    PathBuf::from(home).join("Library/Application Support/hyprnote")
+fn default_pre_event_minutes() -> u64 {
+    2
 }
-fn default_debounce_secs() -> u64 {
-    30
-}
-fn default_uni_calendar_names() -> Vec<String> {
-    vec!["Uni".into()]
+fn default_post_event_minutes() -> u64 {
+    5
 }
 fn default_turso() -> TursoConfig {
     // Default to local embedded replica for resilience:
@@ -46,8 +51,8 @@ pub struct Config {
     pub power: Option<PowerConfig>,
     #[serde(default, deserialize_with = "deserialize_affine_workspaces")]
     pub affine: HashMap<String, AffineConfig>,
-    pub watcher: Option<WatcherConfig>,
     pub stonkwatch_social: Option<StonkwatchSocialConfig>,
+    pub samaya: Option<SamayaConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -141,15 +146,36 @@ where
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct WatcherConfig {
-    #[serde(default = "default_sessions_dir")]
-    pub sessions_dir: PathBuf,
-    #[serde(default = "default_hyprnote_dir")]
-    pub hyprnote_dir: PathBuf,
-    #[serde(default = "default_debounce_secs")]
-    pub debounce_secs: u64,
-    #[serde(default = "default_uni_calendar_names")]
-    pub uni_calendar_names: Vec<String>,
+pub struct SamayaConfig {
+    #[serde(default = "default_samaya_binary")]
+    pub binary: String,
+    #[serde(default = "default_calendar_name")]
+    pub calendar_name: String,
+    #[serde(default = "default_match_keywords")]
+    pub match_keywords: Vec<String>,
+    #[serde(default = "default_samaya_output_dir")]
+    pub output_dir: PathBuf,
+    #[serde(default = "default_pre_event_minutes")]
+    pub pre_event_minutes: u64,
+    #[serde(default = "default_post_event_minutes")]
+    pub post_event_minutes: u64,
+    pub note_extraction_prompt: Option<String>,
+    pub affine_workspace: Option<String>,
+}
+
+impl Default for SamayaConfig {
+    fn default() -> Self {
+        Self {
+            binary: default_samaya_binary(),
+            calendar_name: default_calendar_name(),
+            match_keywords: default_match_keywords(),
+            output_dir: default_samaya_output_dir(),
+            pre_event_minutes: default_pre_event_minutes(),
+            post_event_minutes: default_post_event_minutes(),
+            note_extraction_prompt: None,
+            affine_workspace: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

@@ -31,9 +31,6 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/admin/spike", post(admin_spike))
         .route("/admin/power", get(admin_power))
         .route("/api/sessions", get(list_sessions))
-        .route("/api/import", post(import_latest))
-        .route("/api/import/all", post(import_all))
-        .route("/api/import/{session_id}", post(import_by_id))
         .route("/api/study-plan", post(create_study_plan))
         .route("/api/doc", post(create_doc))
         .route("/api/social/generate", post(generate_social_post))
@@ -625,48 +622,6 @@ async fn list_sessions(
     }
 }
 
-async fn import_latest(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-) -> Result<Json<serde_json::Value>, StatusCode> {
-    check_admin_auth(&state, &headers).await?;
-    match triggers::session_import::import_latest_uni(&state).await {
-        Ok(msg) => Ok(Json(serde_json::json!({"result": msg}))),
-        Err(e) => {
-            tracing::error!("import_latest failed: {e}");
-            Ok(Json(serde_json::json!({"error": e.to_string()})))
-        }
-    }
-}
-
-async fn import_all(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-) -> Result<Json<serde_json::Value>, StatusCode> {
-    check_admin_auth(&state, &headers).await?;
-    match triggers::session_import::import_all_uni(&state).await {
-        Ok(msg) => Ok(Json(serde_json::json!({"result": msg}))),
-        Err(e) => {
-            tracing::error!("import_all failed: {e}");
-            Ok(Json(serde_json::json!({"error": e.to_string()})))
-        }
-    }
-}
-
-async fn import_by_id(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    Path(session_id): Path<String>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
-    check_admin_auth(&state, &headers).await?;
-    match triggers::session_import::import_session(&state, &session_id).await {
-        Ok(msg) => Ok(Json(serde_json::json!({"result": msg}))),
-        Err(e) => {
-            tracing::error!("import_by_id failed: {e}");
-            Ok(Json(serde_json::json!({"error": e.to_string()})))
-        }
-    }
-}
 
 #[derive(Deserialize)]
 struct CreateDocRequest {

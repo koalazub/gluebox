@@ -12,6 +12,9 @@ mod socket;
 mod gluebox_capnp;
 mod tui;
 mod mcp;
+mod gateway_tools;
+mod gateway;
+mod gateway_socket;
 
 use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
@@ -23,6 +26,10 @@ use clap::Parser;
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
+
+    /// Enable debug logging for the gateway (stdout/stderr sizes, etc.)
+    #[arg(long, global = true)]
+    debug: bool,
 }
 
 #[derive(clap::Subcommand)]
@@ -90,20 +97,6 @@ async fn main() -> anyhow::Result<()> {
                 registry.register("affine".into(), connector).await?;
             }
 
-            let (auto_import_tx, mut auto_import_rx) = tokio::sync::mpsc::channel::<String>(64);
-
-            if let Some(ref watcher_cfg) = cfg.watcher {
-                let tx = auto_import_tx.clone();
-                let connector = Arc::new(connectors::session_watcher::SessionWatcherConnector::new(
-                    watcher_cfg.clone(),
-                    Arc::new(move |session_id| {
-                        let _ = tx.try_send(session_id);
-                    }),
-                ));
-                registry.register("watcher".into(), connector).await?;
-            }
-            drop(auto_import_tx);
-
             if let Some(ref social_cfg) = cfg.stonkwatch_social {
                 let connector = Arc::new(
                     connectors::stonkwatch_social::StonkwatchSocialConnector::new(social_cfg.clone()),
@@ -123,22 +116,6 @@ async fn main() -> anyhow::Result<()> {
                 power: power.clone(),
                 started_at: std::time::Instant::now(),
                 events_tx: events_tx.clone(),
-            });
-
-            // Auto-import sessions detected by the watcher
-            let import_state = state.clone();
-            tokio::spawn(async move {
-                while let Some(session_id) = auto_import_rx.recv().await {
-                    if import_state.db.is_imported(&session_id).await.unwrap_or(true) {
-                        tracing::debug!(session_id, "already imported, skipping");
-                        continue;
-                    }
-                    tracing::info!(session_id, "auto-importing detected session");
-                    match triggers::session_import::import_session(&import_state, &session_id).await {
-                        Ok(msg) => tracing::info!("{msg}"),
-                        Err(e) => tracing::error!(session_id, "auto-import failed: {e}"),
-                    }
-                }
             });
 
             let tick_power = state.power.clone();
@@ -191,6 +168,19 @@ async fn main() -> anyhow::Result<()> {
                     tracing::error!("socket server error: {e}");
                 }
             });
+
+            {
+                let cfg = state.config.read().await;
+                let base_path = cfg.socket_path.clone().unwrap_or_else(socket::default_socket_path);
+                drop(cfg);
+                let gateway_path = format!("{base_path}.gateway");
+                let debug_mode = cli.debug;
+                tokio::spawn(async move {
+                    if let Err(e) = gateway_socket::run_gateway(&gateway_path, debug_mode).await {
+                        tracing::error!("gateway socket error: {e}");
+                    }
+                });
+            }
 
             let app = webhook::router(state.clone());
 

@@ -8,11 +8,11 @@ async fn get_bot(state: &Arc<AppState>) -> Option<Arc<MatrixBot>> {
     matrix_connector.bot().await.ok()
 }
 
-pub async fn notify_matrix(state: &Arc<AppState>, msg: &str) {
-    let Some(bot) = get_bot(state).await else { return };
-    if let Err(e) = bot.send_message(msg).await {
-        tracing::error!(%e, "failed to send matrix notification");
-    }
+pub async fn notify_matrix(state: &Arc<AppState>, msg: &str) -> anyhow::Result<()> {
+    let Some(bot) = get_bot(state).await else {
+        anyhow::bail!("matrix bot not available");
+    };
+    bot.send_message(msg).await
 }
 
 pub async fn notify_feedback_room(state: &Arc<AppState>, markdown: &str) {

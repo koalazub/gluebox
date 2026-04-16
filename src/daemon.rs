@@ -2,7 +2,6 @@ use std::sync::Arc;
 use crate::AppState;
 use crate::config::Config;
 use crate::connectors;
-use crate::triggers;
 
 pub async fn reload(state: &Arc<AppState>) -> anyhow::Result<String> {
     let new_cfg = Config::load()?;
@@ -174,51 +173,6 @@ pub async fn reload(state: &Arc<AppState>) -> anyhow::Result<String> {
             }
             changes.push("affine: reconfigured".into());
         }
-    }
-
-    match (&old_cfg.watcher, &new_cfg.watcher) {
-        (None, Some(new)) => {
-            let import_state = state.clone();
-            let connector = Arc::new(connectors::session_watcher::SessionWatcherConnector::new(
-                new.clone(),
-                Arc::new(move |session_id: String| {
-                    let s = import_state.clone();
-                    tokio::spawn(async move {
-                        if s.db.is_imported(&session_id).await.unwrap_or(true) { return; }
-                        tracing::info!(session_id, "auto-importing detected session");
-                        if let Err(e) = triggers::session_import::import_session(&s, &session_id).await {
-                            tracing::error!(session_id, "auto-import failed: {e}");
-                        }
-                    });
-                }),
-            ));
-            state.registry.register("watcher".into(), connector).await?;
-            changes.push("watcher: added".into());
-        }
-        (Some(_), None) => {
-            state.registry.deregister("watcher").await?;
-            changes.push("watcher: removed".into());
-        }
-        (Some(old), Some(new)) if old != new => {
-            state.registry.deregister("watcher").await?;
-            let import_state = state.clone();
-            let connector = Arc::new(connectors::session_watcher::SessionWatcherConnector::new(
-                new.clone(),
-                Arc::new(move |session_id: String| {
-                    let s = import_state.clone();
-                    tokio::spawn(async move {
-                        if s.db.is_imported(&session_id).await.unwrap_or(true) { return; }
-                        tracing::info!(session_id, "auto-importing detected session");
-                        if let Err(e) = triggers::session_import::import_session(&s, &session_id).await {
-                            tracing::error!(session_id, "auto-import failed: {e}");
-                        }
-                    });
-                }),
-            ));
-            state.registry.register("watcher".into(), connector).await?;
-            changes.push("watcher: reconfigured".into());
-        }
-        _ => {}
     }
 
     match (&old_cfg.stonkwatch_social, &new_cfg.stonkwatch_social) {

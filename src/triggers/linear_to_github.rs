@@ -5,6 +5,11 @@ use super::to_matrix;
 use super::github_from_registry;
 
 pub async fn linear_issue_github_sync(state: &Arc<AppState>, payload: &Value) -> anyhow::Result<()> {
+    if state.registry.get_dyn("github").await.is_none() {
+        tracing::debug!("github connector not registered, skipping linear→github sync");
+        return Ok(());
+    }
+
     let issue_id = payload["data"]["id"].as_str().unwrap_or_default();
     let title = payload["data"]["title"].as_str().unwrap_or_default();
     let description = payload["data"]["description"].as_str().unwrap_or_default();
