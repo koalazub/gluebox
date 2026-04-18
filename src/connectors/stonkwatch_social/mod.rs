@@ -5,6 +5,7 @@ pub mod storj;
 pub mod x;
 pub mod bluesky;
 pub mod meta;
+pub mod tiktok;
 pub mod platform;
 pub mod pipeline;
 
@@ -85,6 +86,10 @@ impl StonkwatchSocialConnector {
             if meta_cfg.threads_enabled && meta_cfg.threads_user_id.is_some() {
                 platforms.push(Box::new(meta::ThreadsPlatform::new(meta_cfg.clone())));
             }
+        }
+
+        if let Some(ref tiktok_cfg) = config.tiktok {
+            platforms.push(Box::new(tiktok::TikTokPlatform::new(tiktok_cfg.clone())));
         }
 
         platforms
