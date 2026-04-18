@@ -1,3 +1,4 @@
+pub mod chart_video;
 pub mod content;
 pub mod og_image;
 pub mod storj;
