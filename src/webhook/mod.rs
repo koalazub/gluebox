@@ -801,6 +801,7 @@ async fn publish_social_post(
         story_image_url: None,
         og_title: String::new(),
         og_description: String::new(),
+        video_mp4_path: None,
     };
 
     let platforms_to_use = req.platforms.unwrap_or_else(|| vec!["x".into(), "bluesky".into()]);

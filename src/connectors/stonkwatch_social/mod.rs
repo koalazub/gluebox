@@ -182,6 +182,7 @@ impl StonkwatchSocialConnector {
                     story_image_url: None,
                     og_title: "Stonkwatch — ASX Market Intelligence".to_string(),
                     og_description: "AI-powered ASX announcement summaries, sentiment tracking, and market analysis.".to_string(),
+                    video_mp4_path: None,
                 };
                 info!("Posting promo message {}", promo_index + 1);
                 Self::post_to_all_platforms(&platforms, &promo).await;

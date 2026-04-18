@@ -201,6 +201,7 @@ mod tests {
             story_image_url: None,
             og_title: "$BHP ⚡ — Iron Ore Quarterly Update".into(),
             og_description: "BHP reported record iron ore output, beating estimates by 12%".into(),
+            video_mp4_path: None,
         }
     }
 

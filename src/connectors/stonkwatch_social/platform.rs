@@ -9,6 +9,7 @@ pub struct SocialPost {
     pub story_image_url: Option<String>,
     pub og_title: String,
     pub og_description: String,
+    pub video_mp4_path: Option<std::path::PathBuf>,
 }
 
 pub struct PostResult {

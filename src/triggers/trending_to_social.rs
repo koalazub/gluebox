@@ -143,6 +143,7 @@ async fn build_candidate(
         text,
         og_image_path,
         story_image_path,
+        video_mp4_path: None,
     }
 }
 
