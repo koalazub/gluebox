@@ -280,6 +280,9 @@ pub struct StonkwatchSocialConfig {
     pub bluesky: Option<BlueskyConfig>,
     pub meta: Option<MetaConfig>,
     pub storj: Option<StorjConfig>,
+    pub tiktok: Option<TikTokConfig>,
+    pub chart_video_api_base: Option<String>,
+    pub stonkwatch_api_key: Option<String>,
 }
 
 fn default_max_posts_per_cycle() -> u32 { 1 }
@@ -341,3 +344,23 @@ pub struct MetaConfig {
 }
 
 fn default_true() -> bool { true }
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct TikTokConfig {
+    pub client_key: String,
+    pub client_secret: String,
+    pub access_token: String,
+    pub refresh_token: Option<String>,
+    #[serde(default = "default_tiktok_privacy_level")]
+    pub privacy_level: String,
+    #[serde(default)]
+    pub disable_duet: bool,
+    #[serde(default)]
+    pub disable_stitch: bool,
+    #[serde(default)]
+    pub disable_comment: bool,
+}
+
+fn default_tiktok_privacy_level() -> String {
+    "SELF_ONLY".to_string()
+}
