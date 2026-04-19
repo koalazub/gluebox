@@ -182,9 +182,6 @@ async fn main() -> anyhow::Result<()> {
                 });
             }
 
-            if state.config.read().await.stonkwatch_social.as_ref()
-                .and_then(|s| s.friday_digest_enabled)
-                .unwrap_or(false)
             {
                 let state_clone = state.clone();
                 tokio::spawn(async move {

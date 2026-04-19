@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use chrono::{Datelike, Timelike};
 use chrono_tz::Australia::Sydney;
 use tracing::{info, warn};
@@ -54,7 +54,10 @@ pub async fn run_if_scheduled(state: &Arc<AppState>) -> Result<()> {
     }
 
     let now_sydney = chrono::Utc::now().with_timezone(&Sydney);
-    if now_sydney.weekday() != chrono::Weekday::Fri || now_sydney.hour() != 17 {
+    if now_sydney.weekday() != chrono::Weekday::Fri
+        || now_sydney.hour() != 17
+        || now_sydney.minute() >= 5
+    {
         return Ok(());
     }
 
@@ -89,7 +92,12 @@ pub async fn run_if_scheduled(state: &Arc<AppState>) -> Result<()> {
         }
     };
 
-    let trending_symbols = fetch_weekly_trending(&api_base, &api_key).await?;
+    let http = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .context("failed to build reqwest client")?;
+
+    let trending_symbols = fetch_weekly_trending(&http, &api_base, &api_key).await?;
     let already_posted = state.db.tickers_posted_this_iso_week().await?;
 
     let candidates: Vec<String> = trending_symbols
@@ -104,17 +112,21 @@ pub async fn run_if_scheduled(state: &Arc<AppState>) -> Result<()> {
     }
 
     let segment_dir = PathBuf::from(SEGMENT_DIR);
-    tokio::fs::create_dir_all(&segment_dir).await.ok();
+    tokio::fs::create_dir_all(&segment_dir)
+        .await
+        .context("failed to create segment dir")?;
 
     let render_futs: Vec<_> = candidates
         .iter()
         .map(|symbol| {
+            let http = http.clone();
             let api_base = api_base.clone();
             let api_key = api_key.clone();
             let symbol = symbol.clone();
             let segment_dir = segment_dir.clone();
             async move {
-                let announcement_id = fetch_latest_announcement_id(&api_base, &api_key, &symbol).await;
+                let announcement_id =
+                    fetch_latest_announcement_id(&http, &api_base, &api_key, &symbol).await;
                 chart_video::render_segment(
                     &api_base,
                     &api_key,
@@ -131,32 +143,41 @@ pub async fn run_if_scheduled(state: &Arc<AppState>) -> Result<()> {
 
     let render_results = futures::future::join_all(render_futs).await;
 
-    let mut segment_paths: Vec<PathBuf> = Vec::new();
+    let mut rendered: Vec<(String, PathBuf)> = Vec::new();
     for (i, result) in render_results.into_iter().enumerate() {
         match result {
-            Ok(path) => segment_paths.push(path),
+            Ok(path) => rendered.push((candidates[i].clone(), path)),
             Err(e) => warn!(symbol = candidates[i], error = %e, "friday_digest: segment render failed"),
         }
     }
 
-    if segment_paths.is_empty() {
+    if rendered.is_empty() {
         warn!("friday_digest: all segment renders failed");
         return Ok(());
     }
 
     let montage_dir = PathBuf::from(MONTAGE_DIR);
-    tokio::fs::create_dir_all(&montage_dir).await.ok();
+    tokio::fs::create_dir_all(&montage_dir)
+        .await
+        .context("failed to create montage dir")?;
     let montage_path = montage_dir.join(format!(
         "montage-{}.mp4",
         chrono::Utc::now().timestamp(),
     ));
 
+    let segment_paths: Vec<PathBuf> = rendered.iter().map(|(_, p)| p.clone()).collect();
     stitcher::concat_mp4s(&segment_paths, &montage_path).await?;
 
+    for (_, seg) in &rendered {
+        if let Err(e) = tokio::fs::remove_file(seg).await {
+            warn!(path = %seg.display(), error = %e, "friday_digest: failed to remove segment after stitch");
+        }
+    }
+
     let week_date = chrono::Utc::now().date_naive().to_string();
-    let ticker_tags = candidates
+    let ticker_tags = rendered
         .iter()
-        .map(|s| format!("${s}"))
+        .map(|(s, _)| format!("${s}"))
         .collect::<Vec<_>>()
         .join(" · ");
     let post_text = format!("ASX Top 5 · Week of {week_date} — {ticker_tags}");
@@ -188,6 +209,7 @@ pub async fn run_if_scheduled(state: &Arc<AppState>) -> Result<()> {
 
     if !published {
         warn!("friday_digest: montage rendered but no platform accepted/succeeded");
+        return Ok(());
     }
 
     let record = TrendingPost {
@@ -205,12 +227,15 @@ pub async fn run_if_scheduled(state: &Arc<AppState>) -> Result<()> {
     Ok(())
 }
 
-async fn fetch_weekly_trending(api_base: &str, api_key: &str) -> Result<Vec<String>> {
+async fn fetch_weekly_trending(
+    client: &reqwest::Client,
+    api_base: &str,
+    api_key: &str,
+) -> Result<Vec<String>> {
     let url = format!(
         "{}/api/v1/trending?timeframe=7d&limit=15",
         api_base.trim_end_matches('/')
     );
-    let client = reqwest::Client::new();
     let resp = client
         .get(&url)
         .header("X-API-Key", api_key)
@@ -227,13 +252,17 @@ async fn fetch_weekly_trending(api_base: &str, api_key: &str) -> Result<Vec<Stri
     Ok(parsed.trending.into_iter().map(|t| t.symbol).collect())
 }
 
-async fn fetch_latest_announcement_id(api_base: &str, api_key: &str, symbol: &str) -> Option<String> {
+async fn fetch_latest_announcement_id(
+    client: &reqwest::Client,
+    api_base: &str,
+    api_key: &str,
+    symbol: &str,
+) -> Option<String> {
     let url = format!(
         "{}/api/v1/announcements?symbol={}&per_page=1",
         api_base.trim_end_matches('/'),
         urlencoding::encode(symbol),
     );
-    let client = reqwest::Client::new();
     let resp = client
         .get(&url)
         .header("X-API-Key", api_key)
