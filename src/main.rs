@@ -182,6 +182,23 @@ async fn main() -> anyhow::Result<()> {
                 });
             }
 
+            if state.config.read().await.stonkwatch_social.as_ref()
+                .and_then(|s| s.friday_digest_enabled)
+                .unwrap_or(false)
+            {
+                let state_clone = state.clone();
+                tokio::spawn(async move {
+                    let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
+                    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                    loop {
+                        interval.tick().await;
+                        if let Err(e) = crate::triggers::friday_digest::run_if_scheduled(&state_clone).await {
+                            tracing::error!(error = %e, "friday_digest tick failed");
+                        }
+                    }
+                });
+            }
+
             let app = webhook::router(state.clone());
 
             tracing::info!(%listen_addr, "gluebox starting");
