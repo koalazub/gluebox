@@ -59,6 +59,10 @@ impl SocialPlatform for TikTokPlatform {
         "tiktok"
     }
 
+    fn accepts(&self, post: &SocialPost) -> bool {
+        post.video_mp4_path.is_some()
+    }
+
     fn publish<'a>(
         &'a self,
         post: &'a SocialPost,
@@ -114,6 +118,9 @@ pub async fn upload_video(
 ) -> Result<String> {
     let bytes = tokio::fs::read(video_path).await.context("read video file")?;
     let size = bytes.len();
+    if size == 0 {
+        anyhow::bail!("tiktok upload: video file {} is empty", video_path.display());
+    }
 
     let access_token = { tokens.lock().await.access_token.clone() };
 
@@ -233,6 +240,8 @@ async fn refresh_access_token(
     if let Some(rt) = refreshed.refresh_token {
         guard.refresh_token = Some(rt);
     }
-    persist_tokens(store_path, &guard)?;
+    if let Err(e) = persist_tokens(store_path, &guard) {
+        tracing::warn!(%e, path = %store_path.display(), "tiktok token persist failed; keeping refreshed tokens in memory");
+    }
     Ok(())
 }

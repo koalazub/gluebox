@@ -257,6 +257,10 @@ impl StonkwatchSocialConnector {
         post: &SocialPost,
     ) {
         for platform in platforms {
+            if !platform.accepts(post) {
+                tracing::debug!(platform = platform.name(), "skipping platform: does not accept this post");
+                continue;
+            }
             match platform.publish(post).await {
                 Ok(result) => info!(platform = result.platform, id = %result.id, "Posted"),
                 Err(e) => error!(platform = platform.name(), error = %e, "Failed to post"),

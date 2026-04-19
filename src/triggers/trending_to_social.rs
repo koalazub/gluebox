@@ -131,13 +131,17 @@ async fn build_candidate(
     let output_dir = std::path::Path::new(OG_IMAGE_DIR);
     let og_image_path = pipeline::prepare_image(&image_ann, output_dir, social_cfg.storj.as_ref()).await;
     let story_image_path = pipeline::prepare_story_image(&image_ann, output_dir, social_cfg.storj.as_ref()).await;
-    let video_mp4_path = pipeline::prepare_chart_video(
-        &ann,
-        output_dir,
-        social_cfg.chart_video_api_base.as_deref(),
-        social_cfg.stonkwatch_api_key.as_deref(),
-    )
-    .await;
+    let video_mp4_path = if social_cfg.tiktok.is_some() {
+        pipeline::prepare_chart_video(
+            &ann,
+            output_dir,
+            social_cfg.chart_video_api_base.as_deref(),
+            social_cfg.stonkwatch_api_key.as_deref(),
+        )
+        .await
+    } else {
+        None
+    };
 
     PostCandidate {
         announcement_id: ann.id.clone(),

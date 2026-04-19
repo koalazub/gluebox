@@ -20,6 +20,9 @@ pub struct PostResult {
 pub trait SocialPlatform: Send + Sync {
     fn name(&self) -> &'static str;
     fn publish<'a>(&'a self, post: &'a SocialPost) -> Pin<Box<dyn Future<Output = Result<PostResult>> + Send + 'a>>;
+    fn accepts(&self, _post: &SocialPost) -> bool {
+        true
+    }
 }
 
 pub async fn check_response(response: reqwest::Response, platform: &str) -> Result<reqwest::Response> {
