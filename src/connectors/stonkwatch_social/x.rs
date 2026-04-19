@@ -162,15 +162,16 @@ async fn upload_x_video(
         tracing::warn!(platform = "x", "INIT 401, refreshing token before video upload");
         let new_tokens = refresh_access_token(client, config, &refresh).await?;
         access_token = new_tokens.access_token.clone();
-        {
+        let snapshot = {
             let mut locked = tokens.lock().await;
             locked.access_token = new_tokens.access_token.clone();
             if new_tokens.refresh_token.is_some() {
                 locked.refresh_token = new_tokens.refresh_token.clone();
             }
-            if let Err(e) = persist_tokens(store_path, &locked) {
-                tracing::warn!(%e, "failed to persist refreshed X tokens after INIT 401");
-            }
+            locked.clone()
+        };
+        if let Err(e) = persist_tokens(store_path, &snapshot) {
+            tracing::warn!(%e, "failed to persist refreshed X tokens after INIT 401");
         }
         client
             .post("https://upload.twitter.com/1.1/media/upload.json")
