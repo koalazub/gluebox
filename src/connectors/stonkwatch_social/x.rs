@@ -66,7 +66,7 @@ impl SocialPlatform for XPlatform {
 
     fn publish<'a>(&'a self, post: &'a SocialPost) -> Pin<Box<dyn Future<Output = Result<PostResult>> + Send + 'a>> {
         Box::pin(async move {
-            let id = post_tweet(&self.config, &self.tokens, &self.store_path, &post.text).await?;
+            let id = post_tweet(&self.config, &self.tokens, &self.store_path, &post.text, post.video_mp4_path.as_deref()).await?;
             Ok(PostResult { platform: "x", id })
         })
     }
@@ -77,11 +77,23 @@ pub async fn post_tweet(
     tokens: &Mutex<StoredTokens>,
     store_path: &Path,
     text: &str,
+    video_path: Option<&Path>,
 ) -> Result<String> {
     let client = reqwest::Client::new();
 
+    let media_ids = match video_path {
+        Some(path) => upload_x_video(tokens, path)
+            .await
+            .map(|id| vec![id])
+            .unwrap_or_else(|e| {
+                tracing::warn!(error = %e, "X video upload failed, posting text-only");
+                vec![]
+            }),
+        None => vec![],
+    };
+
     let current_access_token = tokens.lock().await.access_token.clone();
-    let response = post_with_token(&client, text, &current_access_token).await?;
+    let response = post_with_token(&client, text, &current_access_token, &media_ids).await?;
 
     if response.status().as_u16() == 401 {
         let current_refresh = tokens.lock().await.refresh_token.clone();
@@ -106,15 +118,137 @@ pub async fn post_tweet(
             }
         }
 
-        let retry = post_with_token(&client, text, &new_tokens.access_token).await?;
+        let retry = post_with_token(&client, text, &new_tokens.access_token, &media_ids).await?;
         return parse_tweet_id(retry).await;
     }
 
     parse_tweet_id(response).await
 }
 
-async fn post_with_token(client: &reqwest::Client, text: &str, token: &str) -> Result<reqwest::Response> {
-    let body = serde_json::json!({ "text": text });
+const CHUNK_SIZE: usize = 5 * 1024 * 1024;
+
+async fn upload_x_video(
+    tokens: &Mutex<StoredTokens>,
+    video_path: &Path,
+) -> Result<String> {
+    let client = reqwest::Client::new();
+    let bytes = tokio::fs::read(video_path).await.context("read video for X upload")?;
+    let total_bytes = bytes.len();
+
+    let access_token = tokens.lock().await.access_token.clone();
+
+    let init_resp = client
+        .post("https://upload.twitter.com/1.1/media/upload.json")
+        .bearer_auth(&access_token)
+        .form(&[
+            ("command", "INIT"),
+            ("total_bytes", &total_bytes.to_string()),
+            ("media_type", "video/mp4"),
+            ("media_category", "tweet_video"),
+        ])
+        .send()
+        .await
+        .context("X media INIT failed")?;
+
+    let init_resp = check_response(init_resp, "X media INIT").await?;
+    let init_json: serde_json::Value = init_resp.json().await.context("X media INIT parse")?;
+    let media_id = init_json["media_id_string"]
+        .as_str()
+        .context("X media INIT missing media_id_string")?
+        .to_string();
+
+    for (segment_index, chunk) in bytes.chunks(CHUNK_SIZE).enumerate() {
+        let form = reqwest::multipart::Form::new()
+            .part("command", reqwest::multipart::Part::text("APPEND"))
+            .part("media_id", reqwest::multipart::Part::text(media_id.clone()))
+            .part("segment_index", reqwest::multipart::Part::text(segment_index.to_string()))
+            .part("media", reqwest::multipart::Part::bytes(chunk.to_vec()));
+
+        let append_resp = client
+            .post("https://upload.twitter.com/1.1/media/upload.json")
+            .bearer_auth(&access_token)
+            .multipart(form)
+            .send()
+            .await
+            .context("X media APPEND failed")?;
+
+        let status = append_resp.status();
+        if !status.is_success() {
+            let body = append_resp.text().await.unwrap_or_default();
+            anyhow::bail!("X media APPEND error {} at segment {}: {}", status, segment_index, body);
+        }
+    }
+
+    let finalize_resp = client
+        .post("https://upload.twitter.com/1.1/media/upload.json")
+        .bearer_auth(&access_token)
+        .form(&[
+            ("command", "FINALIZE"),
+            ("media_id", media_id.as_str()),
+        ])
+        .send()
+        .await
+        .context("X media FINALIZE failed")?;
+
+    let finalize_resp = check_response(finalize_resp, "X media FINALIZE").await?;
+    let finalize_json: serde_json::Value = finalize_resp.json().await.context("X media FINALIZE parse")?;
+
+    if let Some(check_after) = finalize_json["processing_info"]["check_after_secs"].as_u64() {
+        poll_x_media_status(&client, &access_token, &media_id, check_after).await?;
+    }
+
+    Ok(media_id)
+}
+
+async fn poll_x_media_status(
+    client: &reqwest::Client,
+    access_token: &str,
+    media_id: &str,
+    initial_check_after: u64,
+) -> Result<()> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let mut check_after = initial_check_after;
+
+    loop {
+        tokio::time::sleep(std::time::Duration::from_secs(check_after.min(30))).await;
+
+        if std::time::Instant::now() >= deadline {
+            anyhow::bail!("X media processing timed out after 30s for media_id {}", media_id);
+        }
+
+        let status_resp = client
+            .get("https://upload.twitter.com/1.1/media/upload.json")
+            .bearer_auth(access_token)
+            .query(&[("command", "STATUS"), ("media_id", media_id)])
+            .send()
+            .await
+            .context("X media STATUS failed")?;
+
+        let status_resp = check_response(status_resp, "X media STATUS").await?;
+        let status_json: serde_json::Value = status_resp.json().await.context("X media STATUS parse")?;
+
+        let state = status_json["processing_info"]["state"].as_str().unwrap_or("");
+        match state {
+            "succeeded" => return Ok(()),
+            "failed" => {
+                let error = &status_json["processing_info"]["error"];
+                anyhow::bail!("X media processing failed: {}", error);
+            }
+            _ => {
+                check_after = status_json["processing_info"]["check_after_secs"]
+                    .as_u64()
+                    .unwrap_or(5);
+            }
+        }
+    }
+}
+
+async fn post_with_token(client: &reqwest::Client, text: &str, token: &str, media_ids: &[String]) -> Result<reqwest::Response> {
+    let mut body = serde_json::json!({ "text": text });
+
+    if !media_ids.is_empty() {
+        body["media"] = serde_json::json!({ "media_ids": media_ids });
+    }
 
     client
         .post("https://api.twitter.com/2/tweets")
