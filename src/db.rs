@@ -571,6 +571,34 @@ impl Db {
         }
     }
 
+    pub async fn tickers_posted_this_iso_week(&self) -> anyhow::Result<std::collections::HashSet<String>> {
+        let monday_ts = current_iso_week_monday_utc_ts()?;
+        let conn = self.conn().await?;
+        let mut rows = conn.query(
+            "SELECT DISTINCT ticker FROM trending_posts WHERE posted_at >= ?1 AND ticker != 'WEEKLY_DIGEST'",
+            (monday_ts,),
+        ).await.map_err(|e| anyhow::anyhow!("{}", e))?;
+        let mut set = std::collections::HashSet::new();
+        while let Some(row) = rows.next().await.map_err(|e| anyhow::anyhow!("{}", e))? {
+            if let Ok(v) = row.get_value(0) {
+                if let Some(t) = v.as_text() {
+                    set.insert(t.to_string());
+                }
+            }
+        }
+        Ok(set)
+    }
+
+    pub async fn weekly_digest_posted_this_iso_week(&self) -> anyhow::Result<bool> {
+        let monday_ts = current_iso_week_monday_utc_ts()?;
+        let conn = self.conn().await?;
+        let mut rows = conn.query(
+            "SELECT 1 FROM trending_posts WHERE post_type = 'weekly_digest' AND posted_at >= ?1 LIMIT 1",
+            (monday_ts,),
+        ).await.map_err(|e| anyhow::anyhow!("{}", e))?;
+        Ok(rows.next().await.map_err(|e| anyhow::anyhow!("{}", e))?.is_some())
+    }
+
     #[cfg(test)]
     pub async fn new_in_memory() -> anyhow::Result<Self> {
         let db = turso::Builder::new_local(":memory:").build().await?;
@@ -578,4 +606,13 @@ impl Db {
         instance.migrate().await?;
         Ok(instance)
     }
+}
+
+fn current_iso_week_monday_utc_ts() -> anyhow::Result<i64> {
+    use chrono::Datelike;
+    let now = chrono::Utc::now();
+    let iso = now.date_naive().iso_week();
+    let monday = chrono::NaiveDate::from_isoywd_opt(iso.year(), iso.week(), chrono::Weekday::Mon)
+        .ok_or_else(|| anyhow::anyhow!("invalid iso week"))?;
+    Ok(monday.and_hms_opt(0, 0, 0).unwrap().and_utc().timestamp())
 }
