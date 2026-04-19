@@ -109,6 +109,8 @@ async fn main() -> anyhow::Result<()> {
 
             let (events_tx, _) = broadcast::channel::<socket::ActivityEventData>(256);
 
+            let error_rollup = triggers::error_rollup::ErrorRollup::new();
+
             let state = Arc::new(AppState {
                 registry: registry.clone(),
                 db,
@@ -116,6 +118,7 @@ async fn main() -> anyhow::Result<()> {
                 power: power.clone(),
                 started_at: std::time::Instant::now(),
                 events_tx: events_tx.clone(),
+                error_rollup: error_rollup.clone(),
             });
 
             let tick_power = state.power.clone();
@@ -196,6 +199,23 @@ async fn main() -> anyhow::Result<()> {
                 });
             }
 
+            {
+                let cfg = state.config.read().await;
+                let rollup_room = cfg.matrix.as_ref().and_then(|m| m.error_rollup_room_id.clone());
+                drop(cfg);
+                if let Some(room_id) = rollup_room {
+                    let conn = state.registry.get_dyn("matrix").await;
+                    if let Some(conn) = conn {
+                        use crate::connectors::matrix::MatrixConnector;
+                        if let Some(matrix_connector) = conn.as_any().downcast_ref::<MatrixConnector>() {
+                            if let Ok(bot) = matrix_connector.bot().await {
+                                triggers::error_rollup::spawn_flush_loop(error_rollup, bot, room_id);
+                            }
+                        }
+                    }
+                }
+            }
+
             let app = webhook::router(state.clone());
 
             tracing::info!(%listen_addr, "gluebox starting");
@@ -243,4 +263,5 @@ pub struct AppState {
     pub power: Arc<power::PowerManager>,
     pub started_at: std::time::Instant,
     pub events_tx: broadcast::Sender<socket::ActivityEventData>,
+    pub error_rollup: Arc<triggers::error_rollup::ErrorRollup>,
 }

@@ -10,6 +10,7 @@ use crate::connectors::stonkwatch_social::{
     platform::SocialPlatform,
 };
 use crate::db::TrendingPost;
+use crate::triggers::error_rollup::ErrorRollup;
 
 const DAILY_POST_CAP: i64 = 4;
 const PER_TICKER_COOLDOWN_SECS: i64 = 86400;
@@ -59,7 +60,7 @@ pub async fn handle_trending_entity(
         }
     };
 
-    let candidate = build_candidate(&social_cfg, announcement).await;
+    let candidate = build_candidate(&social_cfg, announcement, &state.error_rollup).await;
     let social_post = candidate.to_social_post();
     let platforms = StonkwatchSocialConnector::build_platforms(&social_cfg);
 
@@ -74,7 +75,10 @@ pub async fn handle_trending_entity(
                 info!(ticker = entity_id, platform = result.platform, id = %result.id, "trending: posted");
                 published_somewhere = true;
             }
-            Err(e) => warn!(ticker = entity_id, platform = platform.name(), error = %e, "trending: platform publish failed"),
+            Err(e) => {
+                warn!(ticker = entity_id, platform = platform.name(), error = %e, "trending: platform publish failed");
+                state.error_rollup.record("platform_publish_failed", format!("{} {}: {}", entity_id, platform.name(), e)).await;
+            }
         }
     }
 
@@ -114,6 +118,7 @@ async fn fetch_announcement(
 async fn build_candidate(
     social_cfg: &StonkwatchSocialConfig,
     ann: pipeline::AnnouncementData,
+    error_rollup: &Arc<ErrorRollup>,
 ) -> PostCandidate {
     let llm = social_cfg.openrouter_api_key.as_ref()
         .map(|key| crate::connectors::opencode::OpenCodeClient::new(key));
@@ -137,6 +142,7 @@ async fn build_candidate(
             output_dir,
             social_cfg.chart_video_api_base.as_deref(),
             social_cfg.stonkwatch_api_key.as_deref(),
+            error_rollup,
         )
         .await
     } else {

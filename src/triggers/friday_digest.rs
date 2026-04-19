@@ -147,7 +147,10 @@ pub async fn run_if_scheduled(state: &Arc<AppState>) -> Result<()> {
     for (i, result) in render_results.into_iter().enumerate() {
         match result {
             Ok(path) => rendered.push((candidates[i].clone(), path)),
-            Err(e) => warn!(symbol = candidates[i], error = %e, "friday_digest: segment render failed"),
+            Err(e) => {
+                warn!(symbol = candidates[i], error = %e, "friday_digest: segment render failed");
+                state.error_rollup.record("chart_video_render_failed", format!("{}: {}", candidates[i], e)).await;
+            }
         }
     }
 
@@ -166,7 +169,11 @@ pub async fn run_if_scheduled(state: &Arc<AppState>) -> Result<()> {
     ));
 
     let segment_paths: Vec<PathBuf> = rendered.iter().map(|(_, p)| p.clone()).collect();
-    stitcher::concat_mp4s(&segment_paths, &montage_path).await?;
+    if let Err(e) = stitcher::concat_mp4s(&segment_paths, &montage_path).await {
+        warn!(error = %e, "friday_digest: ffmpeg stitch failed");
+        state.error_rollup.record("ffmpeg_stitch_failed", format!("{e}")).await;
+        return Err(e);
+    }
 
     for (_, seg) in &rendered {
         if let Err(e) = tokio::fs::remove_file(seg).await {
@@ -203,7 +210,10 @@ pub async fn run_if_scheduled(state: &Arc<AppState>) -> Result<()> {
                 info!(platform = result.platform, id = %result.id, "friday_digest: montage posted");
                 published = true;
             }
-            Err(e) => warn!(platform = platform.name(), error = %e, "friday_digest: platform publish failed"),
+            Err(e) => {
+                warn!(platform = platform.name(), error = %e, "friday_digest: platform publish failed");
+                state.error_rollup.record("weekly_digest_publish_failed", format!("{}: {}", platform.name(), e)).await;
+            }
         }
     }
 

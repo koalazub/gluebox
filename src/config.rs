@@ -97,6 +97,7 @@ pub struct MatrixConfig {
     pub room_id: String,
     pub feedback_room_id: Option<String>,
     pub issues_room_id: Option<String>,
+    pub error_rollup_room_id: Option<String>,
     pub bot_username: Option<String>,
     pub bot_password: Option<String>,
 }
