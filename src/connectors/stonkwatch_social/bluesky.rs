@@ -49,22 +49,25 @@ impl SocialPlatform for BlueskyPlatform {
 
             let facets = build_facets(&post.text, &post.link);
 
-            let embed = if let Some(ref video_path) = post.video_mp4_path {
+            let video_blob = if let Some(ref video_path) = post.video_mp4_path {
                 match upload_bluesky_video(&client, &self.config, session, video_path).await {
-                    Ok(blob) => serde_json::json!({
-                        "$type": "app.bsky.embed.video",
-                        "video": blob,
-                    }),
+                    Ok(blob) => Some(blob),
                     Err(e) => {
                         tracing::warn!(error = %e, "Bluesky video upload failed, falling back to link card");
-                        let thumb = upload_og_image(&client, &self.config, session, post.image_url.as_deref()).await;
-                        build_embed(&post.link, &post.og_title, &post.og_description, thumb)
+                        None
                     }
                 }
             } else {
-                let thumb = upload_og_image(&client, &self.config, session, post.image_url.as_deref()).await;
-                build_embed(&post.link, &post.og_title, &post.og_description, thumb)
+                None
             };
+
+            let thumb = if video_blob.is_none() {
+                upload_og_image(&client, &self.config, session, post.image_url.as_deref()).await
+            } else {
+                None
+            };
+
+            let embed = build_video_or_link_embed(video_blob, &post.link, &post.og_title, &post.og_description, thumb);
 
             let mut record = serde_json::json!({
                 "$type": "app.bsky.feed.post",
@@ -113,6 +116,23 @@ impl SocialPlatform for BlueskyPlatform {
     }
 }
 
+fn build_video_or_link_embed(
+    video_blob: Option<serde_json::Value>,
+    link: &str,
+    og_title: &str,
+    og_description: &str,
+    thumb: Option<serde_json::Value>,
+) -> serde_json::Value {
+    if let Some(blob) = video_blob {
+        serde_json::json!({
+            "$type": "app.bsky.embed.video",
+            "video": blob,
+        })
+    } else {
+        build_embed(link, og_title, og_description, thumb)
+    }
+}
+
 fn build_facets(text: &str, link: &str) -> Vec<serde_json::Value> {
     let mut facets = Vec::new();
     if let Some(byte_start) = text.find(link) {
@@ -153,6 +173,12 @@ async fn upload_bluesky_video(
     session: &CachedSession,
     video_path: &std::path::Path,
 ) -> Result<serde_json::Value> {
+    const BLUESKY_VIDEO_MAX: u64 = 50 * 1024 * 1024;
+    let meta = tokio::fs::metadata(video_path).await.context("stat video for bluesky")?;
+    if meta.len() > BLUESKY_VIDEO_MAX {
+        anyhow::bail!("bluesky video rejected: {} bytes > 50MB limit", meta.len());
+    }
+
     let bytes = tokio::fs::read(video_path).await.context("read video")?;
     let resp = client
         .post(format!("{}/xrpc/com.atproto.repo.uploadBlob", config.service_url))
@@ -276,5 +302,33 @@ mod tests {
         let embed = build_embed(&post.link, &post.og_title, &post.og_description, Some(thumb.clone()));
 
         assert_eq!(embed["external"]["thumb"], thumb);
+    }
+
+    #[test]
+    fn video_embed_selected_when_blob_present() {
+        let blob = serde_json::json!({"$type": "blob", "ref": {"$link": "vid123"}, "mimeType": "video/mp4", "size": 5000000});
+        let embed = build_video_or_link_embed(
+            Some(blob.clone()),
+            "https://stonkwatch.app/announcement/test",
+            "Test Title",
+            "Test description",
+            None,
+        );
+        assert_eq!(embed["$type"], "app.bsky.embed.video");
+        assert_eq!(embed["video"], blob);
+    }
+
+    #[test]
+    fn link_card_embed_selected_when_no_blob() {
+        let embed = build_video_or_link_embed(
+            None,
+            "https://stonkwatch.app/announcement/test",
+            "Test Title",
+            "Test description",
+            None,
+        );
+        assert_eq!(embed["$type"], "app.bsky.embed.external");
+        assert_eq!(embed["external"]["uri"], "https://stonkwatch.app/announcement/test");
+        assert_eq!(embed["external"]["title"], "Test Title");
     }
 }

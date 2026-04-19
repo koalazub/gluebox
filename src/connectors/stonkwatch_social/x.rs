@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use bytes::Bytes;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
@@ -82,7 +83,7 @@ pub async fn post_tweet(
     let client = reqwest::Client::new();
 
     let media_ids = match video_path {
-        Some(path) => upload_x_video(tokens, path)
+        Some(path) => upload_x_video(&client, config, tokens, store_path, path)
             .await
             .map(|id| vec![id])
             .unwrap_or_else(|e| {
@@ -128,14 +129,17 @@ pub async fn post_tweet(
 const CHUNK_SIZE: usize = 5 * 1024 * 1024;
 
 async fn upload_x_video(
+    client: &reqwest::Client,
+    config: &XConfig,
     tokens: &Mutex<StoredTokens>,
+    store_path: &Path,
     video_path: &Path,
 ) -> Result<String> {
-    let client = reqwest::Client::new();
-    let bytes = tokio::fs::read(video_path).await.context("read video for X upload")?;
+    let raw = tokio::fs::read(video_path).await.context("read video for X upload")?;
+    let bytes = Bytes::from(raw);
     let total_bytes = bytes.len();
 
-    let access_token = tokens.lock().await.access_token.clone();
+    let mut access_token = tokens.lock().await.access_token.clone();
 
     let init_resp = client
         .post("https://upload.twitter.com/1.1/media/upload.json")
@@ -150,6 +154,40 @@ async fn upload_x_video(
         .await
         .context("X media INIT failed")?;
 
+    let init_resp = if init_resp.status().as_u16() == 401 {
+        let current_refresh = tokens.lock().await.refresh_token.clone();
+        let Some(refresh) = current_refresh else {
+            anyhow::bail!("X media INIT 401 — no refresh token available");
+        };
+        tracing::warn!(platform = "x", "INIT 401, refreshing token before video upload");
+        let new_tokens = refresh_access_token(client, config, &refresh).await?;
+        access_token = new_tokens.access_token.clone();
+        {
+            let mut locked = tokens.lock().await;
+            locked.access_token = new_tokens.access_token.clone();
+            if new_tokens.refresh_token.is_some() {
+                locked.refresh_token = new_tokens.refresh_token.clone();
+            }
+            if let Err(e) = persist_tokens(store_path, &locked) {
+                tracing::warn!(%e, "failed to persist refreshed X tokens after INIT 401");
+            }
+        }
+        client
+            .post("https://upload.twitter.com/1.1/media/upload.json")
+            .bearer_auth(&access_token)
+            .form(&[
+                ("command", "INIT"),
+                ("total_bytes", &total_bytes.to_string()),
+                ("media_type", "video/mp4"),
+                ("media_category", "tweet_video"),
+            ])
+            .send()
+            .await
+            .context("X media INIT retry failed")?
+    } else {
+        init_resp
+    };
+
     let init_resp = check_response(init_resp, "X media INIT").await?;
     let init_json: serde_json::Value = init_resp.json().await.context("X media INIT parse")?;
     let media_id = init_json["media_id_string"]
@@ -157,7 +195,11 @@ async fn upload_x_video(
         .context("X media INIT missing media_id_string")?
         .to_string();
 
-    for (segment_index, chunk) in bytes.chunks(CHUNK_SIZE).enumerate() {
+    let mut offset = 0;
+    let mut segment_index = 0usize;
+    while offset < bytes.len() {
+        let end = (offset + CHUNK_SIZE).min(bytes.len());
+        let chunk = bytes.slice(offset..end);
         let form = reqwest::multipart::Form::new()
             .part("command", reqwest::multipart::Part::text("APPEND"))
             .part("media_id", reqwest::multipart::Part::text(media_id.clone()))
@@ -177,6 +219,9 @@ async fn upload_x_video(
             let body = append_resp.text().await.unwrap_or_default();
             anyhow::bail!("X media APPEND error {} at segment {}: {}", status, segment_index, body);
         }
+
+        offset = end;
+        segment_index += 1;
     }
 
     let finalize_resp = client
@@ -194,7 +239,7 @@ async fn upload_x_video(
     let finalize_json: serde_json::Value = finalize_resp.json().await.context("X media FINALIZE parse")?;
 
     if let Some(check_after) = finalize_json["processing_info"]["check_after_secs"].as_u64() {
-        poll_x_media_status(&client, &access_token, &media_id, check_after).await?;
+        poll_x_media_status(client, &access_token, &media_id, check_after).await?;
     }
 
     Ok(media_id)
@@ -210,11 +255,14 @@ async fn poll_x_media_status(
     let mut check_after = initial_check_after;
 
     loop {
-        tokio::time::sleep(std::time::Duration::from_secs(check_after.min(30))).await;
-
-        if std::time::Instant::now() >= deadline {
+        let now = std::time::Instant::now();
+        if now >= deadline {
             anyhow::bail!("X media processing timed out after 30s for media_id {}", media_id);
         }
+
+        let remaining = deadline.duration_since(now);
+        let sleep_secs = std::time::Duration::from_secs(check_after).min(remaining);
+        tokio::time::sleep(sleep_secs).await;
 
         let status_resp = client
             .get("https://upload.twitter.com/1.1/media/upload.json")
@@ -243,18 +291,20 @@ async fn poll_x_media_status(
     }
 }
 
-async fn post_with_token(client: &reqwest::Client, text: &str, token: &str, media_ids: &[String]) -> Result<reqwest::Response> {
+fn build_tweet_body(text: &str, media_ids: &[String]) -> serde_json::Value {
     let mut body = serde_json::json!({ "text": text });
-
     if !media_ids.is_empty() {
         body["media"] = serde_json::json!({ "media_ids": media_ids });
     }
+    body
+}
 
+async fn post_with_token(client: &reqwest::Client, text: &str, token: &str, media_ids: &[String]) -> Result<reqwest::Response> {
     client
         .post("https://api.twitter.com/2/tweets")
         .header("Authorization", format!("Bearer {}", token))
         .header("Content-Type", "application/json")
-        .json(&body)
+        .json(&build_tweet_body(text, media_ids))
         .send()
         .await
         .context("Failed to send tweet")
@@ -294,6 +344,24 @@ async fn refresh_access_token(client: &reqwest::Client, config: &XConfig, refres
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn build_tweet_body_no_media_omits_media_field() {
+        let body = build_tweet_body("hello world", &[]);
+        assert_eq!(body["text"], "hello world");
+        assert!(body.get("media").is_none());
+    }
+
+    #[test]
+    fn build_tweet_body_with_media_includes_media_ids() {
+        let ids = vec!["111".to_string(), "222".to_string()];
+        let body = build_tweet_body("check this out", &ids);
+        assert_eq!(body["text"], "check this out");
+        let media_ids = body["media"]["media_ids"].as_array().unwrap();
+        assert_eq!(media_ids.len(), 2);
+        assert_eq!(media_ids[0], "111");
+        assert_eq!(media_ids[1], "222");
+    }
 
     #[test]
     fn persist_and_load_roundtrip() {
