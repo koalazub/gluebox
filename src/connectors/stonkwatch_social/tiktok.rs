@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use anyhow::{Context, Result};
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -13,6 +11,7 @@ use super::platform::{SocialPlatform, SocialPost, PostResult, check_response};
 const TOKEN_STORE_PATH: &str = "/var/lib/gluebox/tiktok-tokens.toml";
 const TIKTOK_API_BASE: &str = "https://open.tiktokapis.com/v2";
 const TIKTOK_TITLE_MAX: usize = 150;
+const TIKTOK_VIDEO_MAX_BYTES: usize = 4 * 1024 * 1024 * 1024;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct StoredTokens {
@@ -120,6 +119,14 @@ pub async fn upload_video(
     let size = bytes.len();
     if size == 0 {
         anyhow::bail!("tiktok upload: video file {} is empty", video_path.display());
+    }
+    if size > TIKTOK_VIDEO_MAX_BYTES {
+        anyhow::bail!(
+            "tiktok upload refused: video file {} is {} bytes (> {}B limit)",
+            video_path.display(),
+            size,
+            TIKTOK_VIDEO_MAX_BYTES
+        );
     }
 
     let access_token = { tokens.lock().await.access_token.clone() };

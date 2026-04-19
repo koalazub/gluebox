@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -23,6 +21,12 @@ struct GenerateVideoResponse {
     symbol: String,
     #[allow(dead_code)]
     profile: String,
+}
+
+fn slug(s: &str) -> String {
+    s.chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect()
 }
 
 pub async fn render_announcement_video(
@@ -66,9 +70,10 @@ pub async fn render_announcement_video(
 
     tokio::fs::create_dir_all(output_dir).await.ok();
     let out_path = output_dir.join(format!(
-        "{}-{}.mp4",
-        symbol,
-        chrono::Utc::now().timestamp()
+        "{}-{}-{}.mp4",
+        slug(symbol),
+        slug(announcement_id),
+        chrono::Utc::now().timestamp(),
     ));
 
     let mp4_bytes = client
