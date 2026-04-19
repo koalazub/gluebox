@@ -283,6 +283,7 @@ pub struct StonkwatchSocialConfig {
     pub tiktok: Option<TikTokConfig>,
     pub chart_video_api_base: Option<String>,
     pub stonkwatch_api_key: Option<String>,
+    pub friday_digest_enabled: Option<bool>,
 }
 
 fn default_max_posts_per_cycle() -> u32 { 1 }
