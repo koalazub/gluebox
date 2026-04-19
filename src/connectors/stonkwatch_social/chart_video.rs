@@ -78,7 +78,9 @@ pub async fn render_announcement_video(
         .await
         .context("chart-video render returned malformed JSON")?;
 
-    tokio::fs::create_dir_all(output_dir).await.ok();
+    tokio::fs::create_dir_all(output_dir)
+        .await
+        .context("failed to create announcement output dir")?;
     let out_path = output_dir.join(format!(
         "{}-{}-{}.mp4",
         slug(symbol),
@@ -146,7 +148,9 @@ pub async fn render_segment(
         .await
         .context("chart-video segment render returned malformed JSON")?;
 
-    tokio::fs::create_dir_all(output_dir).await.ok();
+    tokio::fs::create_dir_all(output_dir)
+        .await
+        .context("failed to create segment output dir")?;
     let out_path = output_dir.join(format!(
         "segment-{}-{}.mp4",
         slug(symbol),
