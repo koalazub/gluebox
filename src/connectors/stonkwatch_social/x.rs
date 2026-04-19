@@ -52,11 +52,11 @@ fn load_stored_tokens(path: &Path) -> Option<StoredTokens> {
     }
 }
 
-fn persist_tokens(path: &Path, tokens: &StoredTokens) -> Result<()> {
+async fn persist_tokens(path: &Path, tokens: &StoredTokens) -> Result<()> {
     let serialized = toml::to_string(tokens).context("failed to serialize X tokens")?;
     let tmp = path.with_extension("toml.tmp");
-    std::fs::write(&tmp, serialized).context("failed to write X token tmp file")?;
-    std::fs::rename(&tmp, path).context("failed to rename X token tmp file into place")?;
+    tokio::fs::write(&tmp, serialized).await.context("failed to write X token tmp file")?;
+    tokio::fs::rename(&tmp, path).await.context("failed to rename X token tmp file into place")?;
     Ok(())
 }
 
@@ -112,7 +112,7 @@ pub async fn post_tweet(
             if new_tokens.refresh_token.is_some() {
                 locked.refresh_token = new_tokens.refresh_token.clone();
             }
-            if let Err(e) = persist_tokens(store_path, &locked) {
+            if let Err(e) = persist_tokens(store_path, &locked).await {
                 tracing::warn!(%e, "failed to persist refreshed X tokens — in-memory update only");
             } else {
                 tracing::info!(path = %store_path.display(), "persisted refreshed X tokens");
@@ -162,16 +162,15 @@ async fn upload_x_video(
         tracing::warn!(platform = "x", "INIT 401, refreshing token before video upload");
         let new_tokens = refresh_access_token(client, config, &refresh).await?;
         access_token = new_tokens.access_token.clone();
-        let snapshot = {
+        {
             let mut locked = tokens.lock().await;
             locked.access_token = new_tokens.access_token.clone();
             if new_tokens.refresh_token.is_some() {
                 locked.refresh_token = new_tokens.refresh_token.clone();
             }
-            locked.clone()
-        };
-        if let Err(e) = persist_tokens(store_path, &snapshot) {
-            tracing::warn!(%e, "failed to persist refreshed X tokens after INIT 401");
+            if let Err(e) = persist_tokens(store_path, &locked).await {
+                tracing::warn!(%e, "failed to persist refreshed X tokens after INIT 401");
+            }
         }
         client
             .post("https://upload.twitter.com/1.1/media/upload.json")
@@ -364,14 +363,14 @@ mod tests {
         assert_eq!(media_ids[1], "222");
     }
 
-    #[test]
-    fn persist_and_load_roundtrip() {
+    #[tokio::test]
+    async fn persist_and_load_roundtrip() {
         let tmp = std::env::temp_dir().join(format!("x-tokens-test-{}.toml", std::process::id()));
         let original = StoredTokens {
             access_token: "atk_123".into(),
             refresh_token: Some("rtk_456".into()),
         };
-        persist_tokens(&tmp, &original).unwrap();
+        persist_tokens(&tmp, &original).await.unwrap();
         let loaded = load_stored_tokens(&tmp).unwrap();
         assert_eq!(loaded.access_token, "atk_123");
         assert_eq!(loaded.refresh_token, Some("rtk_456".into()));

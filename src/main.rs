@@ -210,8 +210,14 @@ async fn main() -> anyhow::Result<()> {
                         if let Some(matrix_connector) = conn.as_any().downcast_ref::<MatrixConnector>() {
                             if let Ok(bot) = matrix_connector.bot().await {
                                 triggers::error_rollup::spawn_flush_loop(error_rollup, bot, room_id);
+                            } else {
+                                tracing::warn!("error-rollup: matrix connector not running; error rollup disabled");
                             }
+                        } else {
+                            tracing::warn!("error-rollup: matrix connector not found/downcastable; error rollup disabled");
                         }
+                    } else {
+                        tracing::warn!("error-rollup: matrix connector not found/downcastable; error rollup disabled");
                     }
                 }
             }
