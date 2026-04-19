@@ -2,6 +2,7 @@ pub mod chart_video;
 pub mod content;
 pub mod og_image;
 pub mod storj;
+pub mod stitcher;
 pub mod x;
 pub mod bluesky;
 pub mod meta;
