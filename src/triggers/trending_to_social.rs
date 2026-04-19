@@ -34,6 +34,11 @@ pub async fn handle_trending_entity(
         }
     };
 
+    if !social_cfg.auto_post {
+        info!(ticker = entity_id, "trending: auto_post=false, skipping");
+        return Ok(TrendingDecision::Skipped("auto_post disabled".into()));
+    }
+
     let daily_count = state.db.trending_posts_in_last_24h().await.unwrap_or(0);
     if daily_count >= DAILY_POST_CAP {
         info!(ticker = entity_id, daily_count, "trending: daily cap reached, skipping");

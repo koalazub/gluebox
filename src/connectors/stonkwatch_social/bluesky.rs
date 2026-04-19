@@ -174,9 +174,14 @@ async fn upload_bluesky_video(
     video_path: &std::path::Path,
 ) -> Result<serde_json::Value> {
     const BLUESKY_VIDEO_MAX: u64 = 50 * 1024 * 1024;
+    const BLUESKY_VIDEO_MAX_LABEL: &str = "50 MiB";
     let meta = tokio::fs::metadata(video_path).await.context("stat video for bluesky")?;
     if meta.len() > BLUESKY_VIDEO_MAX {
-        anyhow::bail!("bluesky video rejected: {} bytes > 50MB limit", meta.len());
+        anyhow::bail!(
+            "bluesky video rejected: {} bytes > {} limit",
+            meta.len(),
+            BLUESKY_VIDEO_MAX_LABEL
+        );
     }
 
     let bytes = tokio::fs::read(video_path).await.context("read video")?;

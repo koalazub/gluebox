@@ -77,6 +77,11 @@ pub async fn run_if_scheduled(state: &Arc<AppState>) -> Result<()> {
         }
     };
 
+    if !social_cfg.auto_post {
+        info!("friday_digest: auto_post=false, skipping");
+        return Ok(());
+    }
+
     let api_base = match &social_cfg.chart_video_api_base {
         Some(b) => b.clone(),
         None => {
