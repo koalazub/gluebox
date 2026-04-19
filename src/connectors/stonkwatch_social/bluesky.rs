@@ -49,9 +49,22 @@ impl SocialPlatform for BlueskyPlatform {
 
             let facets = build_facets(&post.text, &post.link);
 
-            let thumb = upload_og_image(&client, &self.config, session, post.image_url.as_deref()).await;
-
-            let embed = build_embed(&post.link, &post.og_title, &post.og_description, thumb);
+            let embed = if let Some(ref video_path) = post.video_mp4_path {
+                match upload_bluesky_video(&client, &self.config, session, video_path).await {
+                    Ok(blob) => serde_json::json!({
+                        "$type": "app.bsky.embed.video",
+                        "video": blob,
+                    }),
+                    Err(e) => {
+                        tracing::warn!(error = %e, "Bluesky video upload failed, falling back to link card");
+                        let thumb = upload_og_image(&client, &self.config, session, post.image_url.as_deref()).await;
+                        build_embed(&post.link, &post.og_title, &post.og_description, thumb)
+                    }
+                }
+            } else {
+                let thumb = upload_og_image(&client, &self.config, session, post.image_url.as_deref()).await;
+                build_embed(&post.link, &post.og_title, &post.og_description, thumb)
+            };
 
             let mut record = serde_json::json!({
                 "$type": "app.bsky.feed.post",
@@ -132,6 +145,26 @@ fn build_embed(link: &str, og_title: &str, og_description: &str, thumb: Option<s
         "$type": "app.bsky.embed.external",
         "external": external,
     })
+}
+
+async fn upload_bluesky_video(
+    client: &reqwest::Client,
+    config: &BlueskyConfig,
+    session: &CachedSession,
+    video_path: &std::path::Path,
+) -> Result<serde_json::Value> {
+    let bytes = tokio::fs::read(video_path).await.context("read video")?;
+    let resp = client
+        .post(format!("{}/xrpc/com.atproto.repo.uploadBlob", config.service_url))
+        .bearer_auth(&session.access_jwt)
+        .header("Content-Type", "video/mp4")
+        .body(bytes)
+        .send()
+        .await
+        .context("bluesky uploadBlob failed")?;
+    let resp = check_response(resp, "bluesky-uploadBlob").await?;
+    let v: serde_json::Value = resp.json().await.context("bluesky uploadBlob parse")?;
+    v.get("blob").cloned().ok_or_else(|| anyhow::anyhow!("bluesky uploadBlob missing 'blob'"))
 }
 
 async fn upload_og_image(
