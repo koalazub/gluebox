@@ -1,7 +1,9 @@
 use anyhow::{Context, Result};
+use std::sync::Arc;
 use tracing::warn;
 
 use crate::connectors::opencode::OpenCodeClient;
+use crate::triggers::error_rollup::ErrorRollup;
 
 const APP_URL: &str = "https://stonkwatch.app";
 
@@ -302,6 +304,7 @@ pub async fn prepare_chart_video(
     output_dir: &std::path::Path,
     api_base: Option<&str>,
     api_key: Option<&str>,
+    error_rollup: &Arc<ErrorRollup>,
 ) -> Option<std::path::PathBuf> {
     let api_base = api_base?;
     let api_key = api_key?;
@@ -317,6 +320,7 @@ pub async fn prepare_chart_video(
         Ok(path) => Some(path),
         Err(e) => {
             tracing::warn!(ticker = %ann.symbol, error = %e, "chart-video render failed");
+            error_rollup.record("chart_video_render_failed", format!("{}: {}", ann.symbol, e)).await;
             None
         }
     }

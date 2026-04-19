@@ -8,6 +8,7 @@ pub mod feedback;
 pub mod lecture_recorded;
 pub mod trending_to_social;
 pub mod friday_digest;
+pub mod error_rollup;
 
 pub use linear_to_anytype::{linear_issue_created, linear_issue_updated};
 pub use documenso_handlers::{documenso_completed, documenso_rejected};
