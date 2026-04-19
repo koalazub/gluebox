@@ -10,7 +10,7 @@ use crate::AppState;
 use crate::connectors::stonkwatch_social::{
     StonkwatchSocialConnector,
     chart_video,
-    platform::{SocialPost, SocialPlatform},
+    platform::SocialPost,
     stitcher,
 };
 use crate::db::TrendingPost;
