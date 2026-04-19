@@ -1,9 +1,11 @@
+pub mod chart_video;
 pub mod content;
 pub mod og_image;
 pub mod storj;
 pub mod x;
 pub mod bluesky;
 pub mod meta;
+pub mod tiktok;
 pub mod platform;
 pub mod pipeline;
 
@@ -84,6 +86,10 @@ impl StonkwatchSocialConnector {
             if meta_cfg.threads_enabled && meta_cfg.threads_user_id.is_some() {
                 platforms.push(Box::new(meta::ThreadsPlatform::new(meta_cfg.clone())));
             }
+        }
+
+        if let Some(ref tiktok_cfg) = config.tiktok {
+            platforms.push(Box::new(tiktok::TikTokPlatform::new(tiktok_cfg.clone())));
         }
 
         platforms
@@ -181,6 +187,7 @@ impl StonkwatchSocialConnector {
                     story_image_url: None,
                     og_title: "Stonkwatch — ASX Market Intelligence".to_string(),
                     og_description: "AI-powered ASX announcement summaries, sentiment tracking, and market analysis.".to_string(),
+                    video_mp4_path: None,
                 };
                 info!("Posting promo message {}", promo_index + 1);
                 Self::post_to_all_platforms(&platforms, &promo).await;
@@ -250,6 +257,10 @@ impl StonkwatchSocialConnector {
         post: &SocialPost,
     ) {
         for platform in platforms {
+            if !platform.accepts(post) {
+                tracing::debug!(platform = platform.name(), "skipping platform: does not accept this post");
+                continue;
+            }
             match platform.publish(post).await {
                 Ok(result) => info!(platform = result.platform, id = %result.id, "Posted"),
                 Err(e) => error!(platform = platform.name(), error = %e, "Failed to post"),

@@ -1,5 +1,7 @@
 # TikTok Connector Spec for Gluebox
 
+> **⚠️ SUPERSEDED 2026-04-19.** This spec proposed local Ken Burns zoom over OG cards. The shipped implementation instead calls stonkwatch's server-rendered chart-video API (animated price line reveal), downloads the MP4, and uploads it to TikTok as-is. See `docs/superpowers/plans/tiktok-chart-video-pipeline.md` for the current plan and the `src/connectors/stonkwatch_social/{chart_video,tiktok}.rs` modules for the implementation.
+
 ## Goal
 
 Add a `tiktok` platform to the `stonkwatch_social` connector so that ASX announcement content is auto-posted to TikTok as short-form video. This follows the same pattern as the existing X, Bluesky, Meta, and Threads platforms.

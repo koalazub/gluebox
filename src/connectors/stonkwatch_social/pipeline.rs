@@ -296,3 +296,28 @@ pub async fn prepare_story_image(
         }
     }
 }
+
+pub async fn prepare_chart_video(
+    ann: &AnnouncementData,
+    output_dir: &std::path::Path,
+    api_base: Option<&str>,
+    api_key: Option<&str>,
+) -> Option<std::path::PathBuf> {
+    let api_base = api_base?;
+    let api_key = api_key?;
+    match super::chart_video::render_announcement_video(
+        api_base,
+        api_key,
+        &ann.symbol,
+        &ann.id,
+        output_dir,
+    )
+    .await
+    {
+        Ok(path) => Some(path),
+        Err(e) => {
+            tracing::warn!(ticker = %ann.symbol, error = %e, "chart-video render failed");
+            None
+        }
+    }
+}

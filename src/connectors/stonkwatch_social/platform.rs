@@ -9,6 +9,7 @@ pub struct SocialPost {
     pub story_image_url: Option<String>,
     pub og_title: String,
     pub og_description: String,
+    pub video_mp4_path: Option<std::path::PathBuf>,
 }
 
 pub struct PostResult {
@@ -19,6 +20,9 @@ pub struct PostResult {
 pub trait SocialPlatform: Send + Sync {
     fn name(&self) -> &'static str;
     fn publish<'a>(&'a self, post: &'a SocialPost) -> Pin<Box<dyn Future<Output = Result<PostResult>> + Send + 'a>>;
+    fn accepts(&self, _post: &SocialPost) -> bool {
+        true
+    }
 }
 
 pub async fn check_response(response: reqwest::Response, platform: &str) -> Result<reqwest::Response> {

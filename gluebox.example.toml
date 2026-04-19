@@ -67,3 +67,19 @@ webhook_secret = "your-github-webhook-secret"
 # api_url = "https://your-affine-instance.example.com/api"
 # api_key = "your-affine-api-key"
 # workspace_id = "your-workspace-id"
+
+[stonkwatch_social]
+turso_url = "libsql://your-stonkwatch-db.turso.io"
+turso_auth_token = "your-stonkwatch-turso-auth-token"
+chart_video_api_base = "https://api.stonkwatch.au"
+stonkwatch_api_key = "your-stonkwatch-api-key"
+
+[stonkwatch_social.tiktok]
+client_key = "your-tiktok-client-key"
+client_secret = "your-tiktok-client-secret"
+access_token = "your-access-token"
+refresh_token = "your-refresh-token"
+privacy_level = "SELF_ONLY"
+disable_duet = false
+disable_stitch = false
+disable_comment = false

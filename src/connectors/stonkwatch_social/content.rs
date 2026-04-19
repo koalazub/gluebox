@@ -17,6 +17,7 @@ pub struct PostCandidate {
     pub text: String,
     pub og_image_path: Option<String>,
     pub story_image_path: Option<String>,
+    pub video_mp4_path: Option<std::path::PathBuf>,
 }
 
 impl PostCandidate {
@@ -45,6 +46,7 @@ impl PostCandidate {
             story_image_url: self.story_image_path.clone(),
             og_title: self.og_title(),
             og_description: self.og_description(),
+            video_mp4_path: self.video_mp4_path.clone(),
         }
     }
 }
@@ -88,6 +90,7 @@ pub async fn fetch_post_candidates(
             text,
             og_image_path,
             story_image_path,
+            video_mp4_path: None,
         });
     }
 
