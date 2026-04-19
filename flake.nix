@@ -64,7 +64,7 @@
             CARGO_INCREMENTAL = "0";
             CAPNP = "${pkgs.capnproto}/bin/capnp";
             nativeBuildInputs = with pkgs; [ pkg-config cmake capnproto ];
-            buildInputs = with pkgs; [ openssl sqlite ]
+            buildInputs = with pkgs; [ openssl sqlite ffmpeg ]
               ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isDarwin [ pkgs.apple-sdk_15 ];
           };
 
