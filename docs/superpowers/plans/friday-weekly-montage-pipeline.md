@@ -2,11 +2,11 @@
 
 > **For agentic workers:** Use superpowers:subagent-driven-development.
 
-**Goal:** Add the Friday top-5 weekly retrospective TikTok post deferred from `tiktok-chart-video-pipeline.md`. Each Friday at 17:00 AEDT, fetch the week's top-5 trending tickers (excluding those already posted this week), render an 8-second segment for each via stonkwatch's `POST /api/v1/chart-video/segment`, stitch with ffmpeg, upload to TikTok.
+**Goal:** Add the Friday top-5 weekly retrospective TikTok post deferred from gluebox PR #11 (the TikTok chart-video pipeline). Each Friday at 17:00 in the `Australia/Sydney` zone (handles AEDT/AEST DST transitions correctly), fetch the week's top-5 trending tickers (excluding those already posted this week), render an 8-second segment for each via stonkwatch's `POST /api/v1/chart-video/segment`, stitch with ffmpeg, upload to TikTok.
 
 **Architecture:** New cron-driven trigger alongside `trending_to_social.rs`. Stonkwatch renders segments server-side; gluebox stitches locally (ffmpeg on PATH). Posts go through the existing `TikTokPlatform`.
 
-**Dependencies:** Merged `tiktok-chart-video-pipeline.md` (TikTok platform + chart-video HTTP client). ffmpeg in `flake.nix` runtime env.
+**Dependencies:** Gluebox PR #11 merged (TikTok platform + chart-video HTTP client). ffmpeg in `flake.nix` runtime env. Add `chrono-tz` crate for `Australia/Sydney` timezone handling.
 
 ---
 
@@ -39,10 +39,10 @@ Add to `src/db.rs`:
 ```rust
 pub async fn tickers_posted_this_iso_week(&self) -> Result<std::collections::HashSet<String>> {
     let monday_ts = current_iso_week_monday_utc_ts()?;
-    let conn = self.pool.get().await?;
+    let conn = self.conn().await?;
     let mut rows = conn.query(
         "SELECT DISTINCT ticker FROM trending_posts WHERE posted_at >= ?1 AND ticker != 'WEEKLY_DIGEST'",
-        turso::params![monday_ts],
+        (monday_ts,),
     ).await?;
     let mut set = std::collections::HashSet::new();
     while let Some(row) = rows.next().await? {
@@ -57,10 +57,10 @@ pub async fn tickers_posted_this_iso_week(&self) -> Result<std::collections::Has
 
 pub async fn weekly_digest_posted_this_iso_week(&self) -> Result<bool> {
     let monday_ts = current_iso_week_monday_utc_ts()?;
-    let conn = self.pool.get().await?;
+    let conn = self.conn().await?;
     let mut rows = conn.query(
         "SELECT 1 FROM trending_posts WHERE post_type = 'weekly_digest' AND posted_at >= ?1 LIMIT 1",
-        turso::params![monday_ts],
+        (monday_ts,),
     ).await?;
     Ok(rows.next().await?.is_some())
 }
@@ -74,7 +74,7 @@ fn current_iso_week_monday_utc_ts() -> Result<i64> {
 }
 ```
 
-Match the existing DB method style (pool access, error propagation). Commit: `feat(db): iso-week queries for Friday exclude-repeats`.
+Match the existing DB method style (`self.conn().await?` and tuple params — see existing helpers in `src/db.rs`). Commit: `feat(db): iso-week queries for Friday exclude-repeats`.
 
 ## Task 3: Stitcher
 
@@ -97,8 +97,10 @@ pub async fn concat_mp4s(inputs: &[PathBuf], output_path: &Path) -> Result<()> {
     tokio::fs::write(&list_path, list_content).await.context("write ffmpeg list")?;
 
     let status = Command::new("ffmpeg")
-        .args(["-y", "-f", "concat", "-safe", "0", "-i",
-               &list_path.to_string_lossy(), "-c", "copy"])
+        .args(["-y", "-f", "concat", "-safe", "0"])
+        .arg("-i")
+        .arg(&list_path)
+        .args(["-c", "copy"])
         .arg(output_path)
         .output()
         .await
@@ -120,7 +122,7 @@ Commit: `feat(stitcher): ffmpeg concat demuxer for Friday montage`.
 
 Create `src/triggers/friday_digest.rs` with a `run_if_scheduled(&state)` fn that:
 
-1. Returns early unless AEDT weekday = Fri AND hour = 17
+1. Returns early unless `Australia/Sydney` weekday = Fri AND hour = 17 (use `chrono_tz::Australia::Sydney` so DST transitions between AEDT and AEST are handled correctly; do NOT hardcode `+10` offset)
 2. Returns early if `weekly_digest_posted_this_iso_week()` is true (de-dupe — the scheduler ticks every 5 min so this would otherwise fire multiple times in the hour)
 3. Fetches social_cfg; returns early if `chart_video_api_base` or `stonkwatch_api_key` absent
 4. Calls `GET /api/v1/trending?timeframe=7d&limit=15` on stonkwatch

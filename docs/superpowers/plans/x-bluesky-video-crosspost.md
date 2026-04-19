@@ -6,7 +6,7 @@
 
 **Architecture:** No new modules. Each platform's `publish()` gets a conditional media-upload branch.
 
-**Dependencies:** Merged `tiktok-chart-video-pipeline.md`.
+**Dependencies:** Gluebox PR #11 merged.
 
 ---
 
@@ -27,7 +27,7 @@ async fn upload_bluesky_video(
 ) -> Result<serde_json::Value> {
     let bytes = tokio::fs::read(video_path).await.context("read video")?;
     let resp = client
-        .post(format!("{}/xrpc/com.atproto.repo.uploadBlob", config.base_url()))
+        .post(format!("{}/xrpc/com.atproto.repo.uploadBlob", config.service_url))
         .bearer_auth(&session.access_jwt)
         .header("Content-Type", "video/mp4")
         .body(bytes)
