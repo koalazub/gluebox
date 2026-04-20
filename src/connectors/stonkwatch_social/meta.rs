@@ -224,7 +224,7 @@ impl SocialPlatform for ThreadsPlatform {
                 .context("threads_user_id required for Threads posting")?;
 
             let threads_token = self.config.threads_access_token.as_deref()
-                .unwrap_or(&self.config.page_access_token);
+                .context("threads_access_token required — generate a Threads OAuth token at developers.facebook.com (do not reuse the Page token)")?;
 
             let container_response = client
                 .post(format!("https://graph.threads.net/v1.0/{}/threads", threads_user_id))

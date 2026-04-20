@@ -85,6 +85,9 @@ impl StonkwatchSocialConnector {
                 platforms.push(Box::new(meta::InstagramStoryPlatform::new(meta_cfg.clone())));
             }
             if meta_cfg.threads_enabled && meta_cfg.threads_user_id.is_some() {
+                if meta_cfg.threads_access_token.is_none() {
+                    tracing::warn!("Threads enabled with threads_user_id but threads_access_token is missing — Threads posting will fail. Generate a Threads OAuth token at developers.facebook.com.");
+                }
                 platforms.push(Box::new(meta::ThreadsPlatform::new(meta_cfg.clone())));
             }
         }
