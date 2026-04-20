@@ -88,27 +88,58 @@ jobs:
           STORJ_ACCESS_KEY: ${{ secrets.STORJ_ACCESS_KEY }}
           STORJ_SECRET_KEY: ${{ secrets.STORJ_SECRET_KEY }}
           STORJ_BUCKET: ${{ secrets.STORJ_BUCKET }}
+          STONKWATCH_OPENROUTER_API_KEY: ${{ secrets.STONKWATCH_OPENROUTER_API_KEY }}
+          STONKWATCH_TURSO_URL: ${{ secrets.STONKWATCH_TURSO_URL }}
+          STONKWATCH_TURSO_AUTH_TOKEN: ${{ secrets.STONKWATCH_TURSO_AUTH_TOKEN }}
+          STONKWATCH_API_KEY: ${{ secrets.STONKWATCH_API_KEY }}
+          CHART_VIDEO_API_BASE: ${{ secrets.CHART_VIDEO_API_BASE }}
+          TIKTOK_CLIENT_KEY: ${{ secrets.TIKTOK_CLIENT_KEY }}
+          TIKTOK_CLIENT_SECRET: ${{ secrets.TIKTOK_CLIENT_SECRET }}
+          TIKTOK_ACCESS_TOKEN: ${{ secrets.TIKTOK_ACCESS_TOKEN }}
+          TIKTOK_REFRESH_TOKEN: ${{ secrets.TIKTOK_REFRESH_TOKEN }}
         run: |
-          cat > /tmp/gluebox-secrets.toml <<EOF
+          umask 077
+          {
+            printf '\n[stonkwatch_social]\n'
+            printf 'auto_post = true\n'
+            printf 'openrouter_api_key = "%s"\n' "$STONKWATCH_OPENROUTER_API_KEY"
+            printf 'turso_url = "%s"\n' "$STONKWATCH_TURSO_URL"
+            printf 'turso_auth_token = "%s"\n' "$STONKWATCH_TURSO_AUTH_TOKEN"
+            if [ -n "$STONKWATCH_API_KEY" ]; then
+              printf 'stonkwatch_api_key = "%s"\n' "$STONKWATCH_API_KEY"
+            fi
+            if [ -n "$CHART_VIDEO_API_BASE" ]; then
+              printf 'chart_video_api_base = "%s"\n' "$CHART_VIDEO_API_BASE"
+            fi
 
-          [stonkwatch_social.meta]
-          page_access_token = "${META_PAGE_ACCESS_TOKEN}"
-          page_id = "${META_PAGE_ID}"
-          ig_user_id = "${META_IG_USER_ID}"
-          threads_user_id = "${META_THREADS_USER_ID}"
-          threads_access_token = "${META_THREADS_ACCESS_TOKEN}"
+            printf '\n[stonkwatch_social.meta]\n'
+            printf 'page_access_token = "%s"\n' "$META_PAGE_ACCESS_TOKEN"
+            printf 'page_id = "%s"\n' "$META_PAGE_ID"
+            printf 'ig_user_id = "%s"\n' "$META_IG_USER_ID"
+            printf 'threads_user_id = "%s"\n' "$META_THREADS_USER_ID"
+            printf 'threads_access_token = "%s"\n' "$META_THREADS_ACCESS_TOKEN"
 
-          [stonkwatch_social.x]
-          client_id = "${X_CLIENT_ID}"
-          client_secret = "${X_CLIENT_SECRET}"
-          access_token = "${X_ACCESS_TOKEN}"
-          refresh_token = "${X_REFRESH_TOKEN}"
+            printf '\n[stonkwatch_social.x]\n'
+            printf 'client_id = "%s"\n' "$X_CLIENT_ID"
+            printf 'client_secret = "%s"\n' "$X_CLIENT_SECRET"
+            printf 'access_token = "%s"\n' "$X_ACCESS_TOKEN"
+            printf 'refresh_token = "%s"\n' "$X_REFRESH_TOKEN"
 
-          [stonkwatch_social.storj]
-          access_key = "${STORJ_ACCESS_KEY}"
-          secret_key = "${STORJ_SECRET_KEY}"
-          bucket = "${STORJ_BUCKET}"
-          EOF
+            printf '\n[stonkwatch_social.storj]\n'
+            printf 'access_key = "%s"\n' "$STORJ_ACCESS_KEY"
+            printf 'secret_key = "%s"\n' "$STORJ_SECRET_KEY"
+            printf 'bucket = "%s"\n' "$STORJ_BUCKET"
+
+            if [ -n "$TIKTOK_CLIENT_KEY" ]; then
+              printf '\n[stonkwatch_social.tiktok]\n'
+              printf 'client_key = "%s"\n' "$TIKTOK_CLIENT_KEY"
+              printf 'client_secret = "%s"\n' "$TIKTOK_CLIENT_SECRET"
+              printf 'access_token = "%s"\n' "$TIKTOK_ACCESS_TOKEN"
+              printf 'refresh_token = "%s"\n' "$TIKTOK_REFRESH_TOKEN"
+            else
+              echo "::notice::TIKTOK_CLIENT_KEY not set — skipping [stonkwatch_social.tiktok] block (TikTok + chart-video generation will not run in prod)" >&2
+            fi
+          } > /tmp/gluebox-secrets.toml
 
           scp -i ~/.ssh/deploy_key /tmp/gluebox-secrets.toml gluebox-prod:/tmp/gluebox-secrets.toml
 
@@ -116,8 +147,8 @@ jobs:
           set -euo pipefail
           awk '
             BEGIN { skip = 0 }
-            /^\[/ {
-              if ($0 ~ /^\[stonkwatch_social\.(meta|x|storj)\]/) { skip = 1; next }
+            /^[[:space:]]*\[/ {
+              if ($0 ~ /^[[:space:]]*\[stonkwatch_social(\.meta|\.x|\.storj|\.tiktok)?\][[:space:]]*$/) { skip = 1; next }
               else { skip = 0 }
             }
             !skip { print }
