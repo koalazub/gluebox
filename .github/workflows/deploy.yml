@@ -74,6 +74,69 @@ jobs:
               --remote-build \
               .#gluebox-prod
 
+      - name: Render secret-backed config sections
+        env:
+          META_PAGE_ACCESS_TOKEN: ${{ secrets.META_PAGE_ACCESS_TOKEN }}
+          META_PAGE_ID: ${{ secrets.META_PAGE_ID }}
+          META_IG_USER_ID: ${{ secrets.META_IG_USER_ID }}
+          META_THREADS_USER_ID: ${{ secrets.META_THREADS_USER_ID }}
+          META_THREADS_ACCESS_TOKEN: ${{ secrets.META_THREADS_ACCESS_TOKEN }}
+          X_CLIENT_ID: ${{ secrets.X_CLIENT_ID }}
+          X_CLIENT_SECRET: ${{ secrets.X_CLIENT_SECRET }}
+          X_ACCESS_TOKEN: ${{ secrets.X_ACCESS_TOKEN }}
+          X_REFRESH_TOKEN: ${{ secrets.X_REFRESH_TOKEN }}
+          STORJ_ACCESS_KEY: ${{ secrets.STORJ_ACCESS_KEY }}
+          STORJ_SECRET_KEY: ${{ secrets.STORJ_SECRET_KEY }}
+          STORJ_BUCKET: ${{ secrets.STORJ_BUCKET }}
+        run: |
+          cat > /tmp/gluebox-secrets.toml <<EOF
+
+          [stonkwatch_social.meta]
+          page_access_token = "${META_PAGE_ACCESS_TOKEN}"
+          page_id = "${META_PAGE_ID}"
+          ig_user_id = "${META_IG_USER_ID}"
+          threads_user_id = "${META_THREADS_USER_ID}"
+          threads_access_token = "${META_THREADS_ACCESS_TOKEN}"
+
+          [stonkwatch_social.x]
+          client_id = "${X_CLIENT_ID}"
+          client_secret = "${X_CLIENT_SECRET}"
+          access_token = "${X_ACCESS_TOKEN}"
+          refresh_token = "${X_REFRESH_TOKEN}"
+
+          [stonkwatch_social.storj]
+          access_key = "${STORJ_ACCESS_KEY}"
+          secret_key = "${STORJ_SECRET_KEY}"
+          bucket = "${STORJ_BUCKET}"
+          EOF
+
+          scp -i ~/.ssh/deploy_key /tmp/gluebox-secrets.toml gluebox-prod:/tmp/gluebox-secrets.toml
+
+          ssh gluebox-prod bash -se <<'REMOTE'
+          set -euo pipefail
+          awk '
+            BEGIN { skip = 0 }
+            /^\[/ {
+              if ($0 ~ /^\[stonkwatch_social\.(meta|x|storj)\]/) { skip = 1; next }
+              else { skip = 0 }
+            }
+            !skip { print }
+          ' /etc/gluebox/gluebox.toml > /tmp/gluebox.toml.stripped
+
+          cat /tmp/gluebox.toml.stripped /tmp/gluebox-secrets.toml > /etc/gluebox/gluebox.toml
+          chmod 0600 /etc/gluebox/gluebox.toml
+          rm -f /tmp/gluebox.toml.stripped /tmp/gluebox-secrets.toml
+          systemctl restart gluebox
+          REMOTE
+
+          rm -f /tmp/gluebox-secrets.toml
+
+      - name: Verify gluebox is healthy
+        run: |
+          sleep 10
+          ssh gluebox-prod 'systemctl is-active gluebox'
+          ssh gluebox-prod 'journalctl -u gluebox --since "1 minute ago" --no-pager' | tail -30
+
   release:
     needs: deploy
     runs-on: ubuntu-latest
