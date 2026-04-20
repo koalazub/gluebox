@@ -109,13 +109,7 @@ async fn fetch_announcement(
     social_cfg: &StonkwatchSocialConfig,
     ticker: &str,
 ) -> anyhow::Result<Option<pipeline::AnnouncementData>> {
-    let db = turso::sync::Builder::new_remote("/var/lib/gluebox/stonkwatch-replica")
-        .with_remote_url(&social_cfg.turso_url)
-        .with_auth_token(&social_cfg.turso_auth_token)
-        .build()
-        .await
-        .map_err(|e| anyhow::anyhow!("open stonkwatch turso: {e}"))?;
-
+    let db = crate::connectors::stonkwatch_social::replica::open_synced_replica(social_cfg).await?;
     let conn = db.connect().await.map_err(|e| anyhow::anyhow!("turso connect: {e}"))?;
     pipeline::fetch_latest_for_ticker(&conn, ticker, ANNOUNCEMENT_MAX_AGE_SECS).await
 }

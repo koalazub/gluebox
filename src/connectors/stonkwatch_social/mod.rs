@@ -9,6 +9,7 @@ pub mod meta;
 pub mod tiktok;
 pub mod platform;
 pub mod pipeline;
+pub mod replica;
 
 use std::any::Any;
 use std::collections::HashSet;
@@ -106,20 +107,7 @@ impl StonkwatchSocialConnector {
 
         Self::log_platform_status(&platforms, &config);
 
-        let db = match turso::sync::Builder::new_remote("/var/lib/gluebox/stonkwatch-replica")
-            .with_remote_url(&config.turso_url)
-            .with_auth_token(&config.turso_auth_token)
-            .build()
-            .await
-        {
-            Ok(db) => db,
-            Err(e) => {
-                error!(error = %e, "Failed to connect to Stonkwatch Turso DB — social connector stopping");
-                return;
-            }
-        };
-
-        info!(url = %config.turso_url, "Connected to Stonkwatch Turso DB");
+        info!(url = %config.turso_url, "Connecting to Stonkwatch Turso DB");
 
         let mut posted_ids: HashSet<String> = HashSet::new();
         let mut cycle_count: u64 = 0;
@@ -128,6 +116,15 @@ impl StonkwatchSocialConnector {
         loop {
             cycle_count += 1;
             info!("Stonkwatch social: checking for content to post");
+
+            let db = match replica::open_synced_replica(&config).await {
+                Ok(db) => db,
+                Err(e) => {
+                    error!(error = %e, "Failed to open synced Stonkwatch replica");
+                    tokio::time::sleep(std::time::Duration::from_secs(interval_secs)).await;
+                    continue;
+                }
+            };
 
             let conn = match db.connect().await {
                 Ok(c) => c,

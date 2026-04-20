@@ -744,12 +744,12 @@ struct SocialPostRequest {
 async fn connect_stonkwatch_turso(
     social_cfg: &crate::config::StonkwatchSocialConfig,
 ) -> Result<turso::Connection, StatusCode> {
-    let db = turso::sync::Builder::new_remote("/var/lib/gluebox/stonkwatch-replica")
-        .with_remote_url(&social_cfg.turso_url)
-        .with_auth_token(&social_cfg.turso_auth_token)
-        .build()
+    let db = crate::connectors::stonkwatch_social::replica::open_synced_replica(social_cfg)
         .await
-        .map_err(|e| { tracing::error!("Turso connect failed: {e}"); StatusCode::INTERNAL_SERVER_ERROR })?;
+        .map_err(|e| {
+            tracing::error!("Turso connect failed: {e}");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
     db.connect().await.map_err(|e| { tracing::error!("Turso conn failed: {e}"); StatusCode::INTERNAL_SERVER_ERROR })
 }
 
