@@ -1800,6 +1800,7 @@ dependencies = [
  "crossterm 0.28.1",
  "dirs",
  "futures",
+ "gluebox-core",
  "hex",
  "hmac",
  "libc",
@@ -1824,6 +1825,17 @@ dependencies = [
  "turso",
  "url",
  "urlencoding",
+]
+
+[[package]]
+name = "gluebox-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "tokio",
+ "toml 0.8.23",
+ "tracing",
 ]
 
 [[package]]

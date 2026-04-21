@@ -5,9 +5,9 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
 use tokio::sync::broadcast;
 
-use crate::connector::ConnectorStatus;
+use gluebox_core::ConnectorStatus;
 use crate::gluebox_capnp;
-use crate::power::PowerState;
+use gluebox_core::PowerState;
 use crate::AppState;
 
 #[derive(Clone, Debug)]

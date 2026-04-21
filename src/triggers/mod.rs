@@ -1,4 +1,3 @@
-mod linear_to_anytype;
 pub(crate) mod to_matrix;
 mod documenso_handlers;
 mod github_to_linear;
@@ -10,7 +9,6 @@ pub mod trending_to_social;
 pub mod friday_digest;
 pub mod error_rollup;
 
-pub use linear_to_anytype::{linear_issue_created, linear_issue_updated};
 pub use documenso_handlers::{documenso_completed, documenso_rejected};
 pub use github_to_linear::github_issue_opened;
 pub use linear_to_github::linear_issue_github_sync;
@@ -19,7 +17,6 @@ pub use trending_to_social::{handle_trending_entity, TrendingDecision};
 use std::sync::Arc;
 use crate::AppState;
 use crate::connectors::linear::{LinearClient, LinearConnector};
-use crate::connectors::anytype::{AnytypeClient, AnytypeConnector};
 use crate::connectors::github::{GithubClient, GithubConnector};
 use crate::connectors::opencode::{OpenCodeClient, OpenCodeConnector};
 use crate::connectors::affine::{AffineClient, AffineConnector};
@@ -30,16 +27,6 @@ pub(crate) async fn linear_from_registry(state: &Arc<AppState>) -> anyhow::Resul
     conn.as_any()
         .downcast_ref::<LinearConnector>()
         .ok_or_else(|| anyhow::anyhow!("linear connector type mismatch"))?
-        .client()
-        .await
-}
-
-pub(crate) async fn anytype_from_registry(state: &Arc<AppState>) -> anyhow::Result<AnytypeClient> {
-    let conn = state.registry.get_dyn("anytype").await
-        .ok_or_else(|| anyhow::anyhow!("anytype connector not available"))?;
-    conn.as_any()
-        .downcast_ref::<AnytypeConnector>()
-        .ok_or_else(|| anyhow::anyhow!("anytype connector type mismatch"))?
         .client()
         .await
 }

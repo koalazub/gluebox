@@ -20,7 +20,6 @@ pub(super) fn render_event_line(
         "matrix" => Color::Rgb(80, 200, 120),
         "github" => Color::White,
         "documenso" => Color::Rgb(80, 140, 220),
-        "anytype" => Color::Rgb(0, 200, 200),
         "opencode" => Color::Rgb(220, 200, 80),
         _ => Color::Gray,
     };

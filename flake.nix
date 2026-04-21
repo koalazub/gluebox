@@ -9,23 +9,13 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
-    any-sync-bundle-src = {
-      url = "github:grishy/any-sync-bundle/v1.3.0-2026-01-31";
-      flake = false;
-    };
-
     valkey-bloom-src = {
       url = "github:valkey-io/valkey-bloom/1.0.0";
       flake = false;
     };
-
-    anytype-cli-linux-amd64 = {
-      url = "https://github.com/anyproto/anytype-cli/releases/download/v0.1.9/anytype-cli-v0.1.9-linux-amd64.tar.gz";
-      flake = false;
-    };
   };
 
-  outputs = { self, nixpkgs, crane, deploy-rs, any-sync-bundle-src, valkey-bloom-src, anytype-cli-linux-amd64, ... }:
+  outputs = { self, nixpkgs, crane, deploy-rs, valkey-bloom-src, ... }:
     let
       forAllSystems = f: nixpkgs.lib.genAttrs [ "x86_64-linux" "aarch64-darwin" ] (system: f {
         inherit system;
@@ -74,7 +64,7 @@
           package = craneLib.buildPackage (commonArgs // {
             inherit cargoArtifacts;
             meta = {
-              description = "Glue layer syncing Linear, Anytype, Matrix, and Documenso";
+              description = "Glue layer syncing Linear, Matrix, Documenso, and Affine";
               mainProgram = "gluebox";
             };
           });
@@ -90,45 +80,8 @@
       packages = forAllSystems ({ system, pkgs }: {
         gluebox = (glueboxFor pkgs).package;
 
-        any-sync-bundle = (pkgs.buildGoModule.override { go = pkgs.go_1_25; }) {
-          pname = "any-sync-bundle";
-          version = "1.3.0-2026-01-31";
-          src = any-sync-bundle-src;
-          vendorHash = "sha256-IUAticFP900vVNRlnU/fzScg1/AIXjux0XuXMYFq0gQ=";
-          env.CGO_ENABLED = 0;
-          ldflags = [
-            "-w" "-s"
-            "-X github.com/grishy/any-sync-bundle/cmd.version=v1.3.0-2026-01-31"
-            "-X github.com/grishy/any-sync-bundle/cmd.commit=${any-sync-bundle-src.rev or "unknown"}"
-          ];
-          doCheck = false;
-          meta = {
-            description = "All-in-one self-hosted Anytype server";
-            mainProgram = "any-sync-bundle";
-          };
-        };
-
         default = self.packages.${system}.gluebox;
       } // nixpkgs.lib.optionalAttrs (system == "x86_64-linux") {
-        anytype-cli = pkgs.stdenv.mkDerivation {
-          pname = "anytype-cli";
-          version = "0.1.9";
-          src = anytype-cli-linux-amd64;
-          dontUnpack = false;
-          nativeBuildInputs = [ pkgs.autoPatchelfHook ];
-          buildInputs = [ pkgs.stdenv.cc.cc.lib ];
-          installPhase = ''
-            mkdir -p $out/bin
-            cp anytype $out/bin/anytype
-            chmod +x $out/bin/anytype
-          '';
-          meta = {
-            description = "Headless Anytype CLI with embedded anytype-heart";
-            mainProgram = "anytype";
-            platforms = [ "x86_64-linux" ];
-          };
-        };
-
         valkey-bloom = pkgs.rustPlatform.buildRustPackage {
           pname = "valkey-bloom";
           version = "1.0.0";

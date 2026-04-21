@@ -34,31 +34,6 @@ pub async fn reload(state: &Arc<AppState>) -> anyhow::Result<String> {
         _ => {}
     }
 
-    match (&old_cfg.anytype, &new_cfg.anytype) {
-        (None, Some(new)) => {
-            let connector = Arc::new(connectors::anytype::AnytypeConnector::new(new.clone()));
-            state.registry.register("anytype".into(), connector).await?;
-            changes.push("anytype: added".into());
-        }
-        (Some(_), None) => {
-            state.registry.deregister("anytype").await?;
-            changes.push("anytype: removed".into());
-        }
-        (Some(old), Some(new)) if old != new => {
-            if let Some(conn) = state.registry.get_dyn("anytype").await {
-                let toml_val = toml::Value::try_from(new.clone())?;
-                let reconfigured = conn.reconfigure(&toml_val).await?;
-                if !reconfigured {
-                    state.registry.deregister("anytype").await?;
-                    let connector = Arc::new(connectors::anytype::AnytypeConnector::new(new.clone()));
-                    state.registry.register("anytype".into(), connector).await?;
-                }
-            }
-            changes.push("anytype: reconfigured".into());
-        }
-        _ => {}
-    }
-
     match (&old_cfg.matrix, &new_cfg.matrix) {
         (None, Some(new)) => {
             let connector = Arc::new(connectors::matrix::MatrixConnector::new(new.clone()));

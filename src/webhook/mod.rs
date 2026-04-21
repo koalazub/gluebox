@@ -94,19 +94,18 @@ async fn handle_linear(
         tracing::error!(%e, "failed to log linear event");
     }
 
-    let result = match (event_type, action) {
+    let result: anyhow::Result<()> = match (event_type, action) {
         ("Issue", "create") => {
             let title = payload["data"]["title"].as_str().unwrap_or("(untitled)");
             let url = payload["url"].as_str().unwrap_or("");
             to_matrix::notify_ticket_created(&state, title, url, None).await;
 
-            let spec_result = triggers::linear_issue_created(&state, &payload).await;
             if let Err(e) = triggers::linear_issue_github_sync(&state, &payload).await {
                 tracing::error!(%e, "linear→github sync failed");
             }
-            spec_result
+            Ok(())
         }
-        ("Issue", "update") => triggers::linear_issue_updated(&state, &payload).await,
+        ("Issue", "update") => Ok(()),
         _ => {
             tracing::debug!(event_type, action, "unhandled linear event");
             Ok(())
@@ -547,19 +546,19 @@ struct AdminPowerResponse {
     threshold: f64,
 }
 
-fn connector_status_str(status: &crate::connector::ConnectorStatus) -> String {
+fn connector_status_str(status: &gluebox_core::ConnectorStatus) -> String {
     match status {
-        crate::connector::ConnectorStatus::Running => "running".to_string(),
-        crate::connector::ConnectorStatus::Stopped => "stopped".to_string(),
-        crate::connector::ConnectorStatus::Suspended => "suspended".to_string(),
-        crate::connector::ConnectorStatus::Error(e) => format!("error: {e}"),
+        gluebox_core::ConnectorStatus::Running => "running".to_string(),
+        gluebox_core::ConnectorStatus::Stopped => "stopped".to_string(),
+        gluebox_core::ConnectorStatus::Suspended => "suspended".to_string(),
+        gluebox_core::ConnectorStatus::Error(e) => format!("error: {e}"),
     }
 }
 
-fn power_state_str(state: &crate::power::PowerState) -> String {
+fn power_state_str(state: &gluebox_core::PowerState) -> String {
     match state {
-        crate::power::PowerState::Active => "active".to_string(),
-        crate::power::PowerState::Resting => "resting".to_string(),
+        gluebox_core::PowerState::Active => "active".to_string(),
+        gluebox_core::PowerState::Resting => "resting".to_string(),
     }
 }
 

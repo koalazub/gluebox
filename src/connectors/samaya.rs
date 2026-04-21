@@ -5,7 +5,7 @@ use std::future::Future;
 use std::sync::atomic::{AtomicU8, Ordering};
 use tokio::process::Command;
 use tokio::sync::Mutex;
-use crate::connector::{Connector, ConnectorStatus};
+use gluebox_core::{Connector, ConnectorStatus};
 
 pub struct SamayaConnector {
     config: Mutex<crate::config::SamayaConfig>,

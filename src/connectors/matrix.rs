@@ -188,7 +188,7 @@ use std::sync::Arc;
 use std::pin::Pin;
 use std::future::Future;
 use tokio::sync::Mutex;
-use crate::connector::{Connector, ConnectorStatus};
+use gluebox_core::{Connector, ConnectorStatus};
 
 pub struct MatrixConnector {
     config: Mutex<crate::config::MatrixConfig>,

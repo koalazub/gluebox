@@ -40,7 +40,6 @@ pub struct Config {
     pub listen_addr: String,
     pub notify_secret: Option<String>,
     pub linear: Option<LinearConfig>,
-    pub anytype: Option<AnytypeConfig>,
     pub matrix: Option<MatrixConfig>,
     pub documenso: Option<DocumensoConfig>,
     pub opencode: Option<OpenCodeConfig>,
@@ -81,13 +80,6 @@ pub struct LinearConfig {
     pub api_key: String,
     pub webhook_secret: String,
     pub team_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct AnytypeConfig {
-    pub api_url: String,
-    pub api_key: String,
-    pub space_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -186,26 +178,7 @@ pub struct DocumensoConfig {
     pub webhook_secret: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct PowerConfig {
-    pub threshold: f64,
-    pub decay_rate: f64,
-    pub tick_interval_secs: u64,
-    pub spike_weight: f64,
-    pub min_active_secs: u64,
-}
-
-impl Default for PowerConfig {
-    fn default() -> Self {
-        Self {
-            threshold: 5.0,
-            decay_rate: 0.5,
-            tick_interval_secs: 30,
-            spike_weight: 2.0,
-            min_active_secs: 10,
-        }
-    }
-}
+pub use gluebox_core::PowerConfig;
 
 impl Config {
     pub fn load() -> anyhow::Result<Self> {

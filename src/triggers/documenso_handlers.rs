@@ -1,10 +1,9 @@
 use std::sync::Arc;
-use serde_json::json;
 use crate::AppState;
 use crate::connectors::documenso::WebhookPayload;
 use crate::db::ContractMapping;
 use super::to_matrix;
-use super::{linear_from_registry, anytype_from_registry};
+use super::linear_from_registry;
 
 pub async fn documenso_completed(state: &Arc<AppState>, payload: &WebhookPayload) -> anyhow::Result<()> {
     let doc = &payload.payload;
@@ -16,36 +15,10 @@ pub async fn documenso_completed(state: &Arc<AppState>, payload: &WebhookPayload
         .map(|r| r.iter().map(|p| format!("{} <{}>", p.name, p.email)).collect::<Vec<_>>().join(", "))
         .unwrap_or_default();
 
-    let description = format!(
-        "Status: Completed\nParties: {parties}\nCompleted: {}",
-        doc.completed_at.as_deref().unwrap_or("unknown"),
-    );
-
     let existing = state.db.get_contract_by_documenso_id(&doc_id).await?;
-
-    let anytype_id = if let Ok(anytype) = anytype_from_registry(state).await {
-        if let Some(ref m) = existing {
-            if let Some(ref aid) = m.anytype_object_id {
-                anytype.update_object(aid, json!({
-                    "name": doc.title,
-                    "description": description,
-                })).await?;
-                Some(aid.clone())
-            } else {
-                let obj = anytype.create_object("contract", &doc.title, &description, None).await?;
-                Some(obj.id)
-            }
-        } else {
-            let obj = anytype.create_object("contract", &doc.title, &description, None).await?;
-            Some(obj.id)
-        }
-    } else {
-        existing.as_ref().and_then(|m| m.anytype_object_id.clone())
-    };
 
     state.db.upsert_contract(&ContractMapping {
         documenso_document_id: doc_id.clone(),
-        anytype_object_id: anytype_id,
         linear_issue_id: existing.and_then(|m| m.linear_issue_id),
         status: Some("completed".to_string()),
         last_synced_at: None,
@@ -78,19 +51,8 @@ pub async fn documenso_rejected(state: &Arc<AppState>, payload: &WebhookPayload)
 
     let existing = state.db.get_contract_by_documenso_id(&doc_id).await?;
 
-    if let Ok(anytype) = anytype_from_registry(state).await {
-        if let Some(ref m) = existing {
-            if let Some(ref aid) = m.anytype_object_id {
-                anytype.update_object(aid, json!({
-                    "description": description,
-                })).await?;
-            }
-        }
-    }
-
     state.db.upsert_contract(&ContractMapping {
         documenso_document_id: doc_id.clone(),
-        anytype_object_id: existing.as_ref().and_then(|m| m.anytype_object_id.clone()),
         linear_issue_id: existing.as_ref().and_then(|m| m.linear_issue_id.clone()),
         status: Some("rejected".to_string()),
         last_synced_at: None,

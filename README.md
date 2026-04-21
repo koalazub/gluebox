@@ -2,7 +2,7 @@
 
 A runtime-configurable service daemon that synchronises data across external tools and reacts to events. Connectors are managed through a common lifecycle interface, toggled on or off at runtime, and hot-reloaded from a single TOML config file. A leaky integrate-and-fire (LIF) neuron model governs power state, suspending idle connectors and waking them on demand. A TUI dashboard provides real-time visibility into connector health, activity, and power state.
 
-Gluebox currently integrates: Linear, Anytype, Matrix, Documenso, GitHub, OpenCode (AI), AFFine, and a filesystem watcher for Hyprnote/char lecture sessions.
+Gluebox currently integrates: Linear, Matrix, Documenso, GitHub, OpenCode (AI), AFFine, and a filesystem watcher for Hyprnote/char lecture sessions.
 
 ---
 
@@ -46,7 +46,6 @@ Each connector wraps an API client and implements the Connector trait. All conne
 | Connector | Service | Purpose |
 |-----------|---------|---------|
 | `linear` | Linear | Issue tracking, spec management, feedback tickets |
-| `anytype` | Anytype | Object storage for specs and contracts |
 | `matrix` | Matrix | E2EE messaging, notifications, AI chatbot |
 | `documenso` | Documenso | Document signing webhook payloads |
 | `github` | GitHub | Issue sync with Linear |
@@ -64,11 +63,9 @@ Triggers are the business logic that runs when events arrive. They pull connecto
 
 | Trigger | Source | Action |
 |---------|--------|--------|
-| `linear_issue_created` | Linear webhook | Creates Anytype spec object, stores mapping |
-| `linear_issue_updated` | Linear webhook | Updates Anytype spec, notifies Matrix on state changes |
 | `github_issue_opened` | GitHub webhook | Creates Linear issue, stores bidirectional mapping |
 | `linear_issue_github_sync` | Linear webhook | Creates GitHub issue from Linear, stores mapping |
-| `documenso_completed` | Documenso webhook | Creates/updates Anytype contract, notifies Matrix |
+| `documenso_completed` | Documenso webhook | Stores/updates contract mapping, notifies Matrix |
 | `documenso_rejected` | Documenso webhook | Updates contract status, notifies Matrix |
 | `session_import` | Watcher / API | Imports char lecture session to AFFine |
 | `study_plan` | API | Generates priority-ranked study plan in AFFine |
@@ -141,7 +138,6 @@ All parameters are configurable in `[power]` and hot-reloadable.
 |  * linear    ........  42 evt |  linear   issue.created LIN-284     |
 |  ~ matrix    ........   3 evt |  github   push main 3 commits       |
 |  * github    ........  18 evt |  matrix   message !bot spec          |
-|  o anytype                    |  linear   issue.updated LIN-281      |
 |  * affine    ........   5 evt |  affine   doc.created Study Plan     |
 +-------------------------------+-------------------------------------+
 |  [t]oggle  [r]eload  [q]uit  [up/down] select                      |
@@ -208,7 +204,6 @@ See `gluebox.example.toml` for a complete annotated example.
 | `[turso]` | Database connection. Required. Supports `libsql://` (Turso cloud), `file:` (local SQLite), or remote with local replica via `replica_path`. |
 | `[power]` | LIF parameters: `threshold`, `decay_rate`, `tick_interval_secs`, `spike_weight`, `min_active_secs` |
 | `[linear]` | Linear API key, webhook secret, optional team ID |
-| `[anytype]` | Anytype HTTP API URL, API key, space ID |
 | `[matrix]` | Matrix homeserver, access token, room IDs, optional bot credentials for E2EE |
 | `[documenso]` | Documenso API URL, API key, webhook secret |
 | `[opencode]` | OpenRouter API key (enables the AI chatbot in Matrix) |
@@ -247,7 +242,7 @@ Gluebox runs on a NixOS VPS with the configuration in `hosts/gluebox-prod/`. The
 - `nixosConfigurations.gluebox-prod` -- full NixOS system config
 - `deploy.nodes.gluebox-prod` -- deploy-rs activation profile
 
-The production stack includes Tailscale for networking (funnel exposes the webhook endpoints), Valkey with bloom filter module, MongoDB with replica set for Anytype, the any-sync-bundle server, and anytype-cli for the Anytype HTTP API.
+The production stack includes Tailscale for networking (funnel exposes the webhook endpoints) and Valkey with the bloom filter module.
 
 The daemon runs as a systemd service that restarts on failure with a 30-second delay. Config lives at `/etc/gluebox/gluebox.toml`.
 

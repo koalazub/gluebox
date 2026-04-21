@@ -12,9 +12,7 @@ pub struct Db {
 #[derive(Debug, Clone)]
 pub struct SpecMapping {
     pub linear_issue_id: String,
-    pub anytype_object_id: Option<String>,
     pub linear_url: Option<String>,
-    pub anytype_url: Option<String>,
     pub last_synced_at: Option<String>,
 }
 
@@ -30,7 +28,6 @@ pub struct FeedbackTicket {
 #[derive(Debug, Clone)]
 pub struct ContractMapping {
     pub documenso_document_id: String,
-    pub anytype_object_id: Option<String>,
     pub linear_issue_id: Option<String>,
     pub status: Option<String>,
     pub last_synced_at: Option<String>,
@@ -138,14 +135,11 @@ impl Db {
         let statements = [
             "CREATE TABLE IF NOT EXISTS spec_mappings (
                 linear_issue_id TEXT PRIMARY KEY,
-                anytype_object_id TEXT,
                 linear_url TEXT,
-                anytype_url TEXT,
                 last_synced_at TEXT
             )",
             "CREATE TABLE IF NOT EXISTS contract_mappings (
                 documenso_document_id TEXT PRIMARY KEY,
-                anytype_object_id TEXT,
                 linear_issue_id TEXT,
                 status TEXT,
                 last_synced_at TEXT
@@ -199,8 +193,6 @@ impl Db {
             )",
             "CREATE INDEX IF NOT EXISTS idx_trending_posts_ticker_time ON trending_posts(ticker, posted_at DESC)",
             "CREATE INDEX IF NOT EXISTS idx_trending_posts_time ON trending_posts(posted_at DESC)",
-            "CREATE INDEX IF NOT EXISTS idx_spec_anytype ON spec_mappings(anytype_object_id)",
-            "CREATE INDEX IF NOT EXISTS idx_contract_anytype ON contract_mappings(anytype_object_id)",
             "CREATE INDEX IF NOT EXISTS idx_contract_linear ON contract_mappings(linear_issue_id)",
             "CREATE INDEX IF NOT EXISTS idx_event_log_ext ON event_log(source, external_id)",
             "CREATE INDEX IF NOT EXISTS idx_feedback_category ON feedback_tickets(category)",
@@ -215,18 +207,14 @@ impl Db {
 
     pub async fn upsert_spec(&self, mapping: &SpecMapping) -> anyhow::Result<()> {
         self.conn().await?.execute(
-            "INSERT INTO spec_mappings (linear_issue_id, anytype_object_id, linear_url, anytype_url, last_synced_at)
-             VALUES (?1, ?2, ?3, ?4, datetime('now'))
+            "INSERT INTO spec_mappings (linear_issue_id, linear_url, last_synced_at)
+             VALUES (?1, ?2, datetime('now'))
              ON CONFLICT(linear_issue_id) DO UPDATE SET
-                anytype_object_id = COALESCE(excluded.anytype_object_id, anytype_object_id),
                 linear_url = COALESCE(excluded.linear_url, linear_url),
-                anytype_url = COALESCE(excluded.anytype_url, anytype_url),
                 last_synced_at = datetime('now')",
             (
                 mapping.linear_issue_id.as_str(),
-                mapping.anytype_object_id.as_deref().unwrap_or(""),
                 mapping.linear_url.as_deref().unwrap_or(""),
-                mapping.anytype_url.as_deref().unwrap_or(""),
             ),
         ).await.map_err(|e| anyhow::anyhow!("{}", e))?;
         Ok(())
@@ -235,36 +223,15 @@ impl Db {
     pub async fn get_spec_by_linear_id(&self, linear_issue_id: &str) -> anyhow::Result<Option<SpecMapping>> {
         let conn = self.conn().await?;
         let mut rows = conn.query(
-            "SELECT linear_issue_id, anytype_object_id, linear_url, anytype_url, last_synced_at
+            "SELECT linear_issue_id, linear_url, last_synced_at
              FROM spec_mappings WHERE linear_issue_id = ?1",
             (linear_issue_id,),
         ).await.map_err(|e| anyhow::anyhow!("{}", e))?;
         match rows.next().await.map_err(|e| anyhow::anyhow!("{}", e))? {
             Some(row) => Ok(Some(SpecMapping {
                 linear_issue_id: text(&row, 0),
-                anytype_object_id: opt_text(&row, 1),
-                linear_url: opt_text(&row, 2),
-                anytype_url: opt_text(&row, 3),
-                last_synced_at: opt_text(&row, 4),
-            })),
-            None => Ok(None),
-        }
-    }
-
-    pub async fn get_spec_by_anytype_id(&self, anytype_object_id: &str) -> anyhow::Result<Option<SpecMapping>> {
-        let conn = self.conn().await?;
-        let mut rows = conn.query(
-            "SELECT linear_issue_id, anytype_object_id, linear_url, anytype_url, last_synced_at
-             FROM spec_mappings WHERE anytype_object_id = ?1",
-            (anytype_object_id,),
-        ).await.map_err(|e| anyhow::anyhow!("{}", e))?;
-        match rows.next().await.map_err(|e| anyhow::anyhow!("{}", e))? {
-            Some(row) => Ok(Some(SpecMapping {
-                linear_issue_id: text(&row, 0),
-                anytype_object_id: opt_text(&row, 1),
-                linear_url: opt_text(&row, 2),
-                anytype_url: opt_text(&row, 3),
-                last_synced_at: opt_text(&row, 4),
+                linear_url: opt_text(&row, 1),
+                last_synced_at: opt_text(&row, 2),
             })),
             None => Ok(None),
         }
@@ -272,16 +239,14 @@ impl Db {
 
     pub async fn upsert_contract(&self, mapping: &ContractMapping) -> anyhow::Result<()> {
         self.conn().await?.execute(
-            "INSERT INTO contract_mappings (documenso_document_id, anytype_object_id, linear_issue_id, status, last_synced_at)
-             VALUES (?1, ?2, ?3, ?4, datetime('now'))
+            "INSERT INTO contract_mappings (documenso_document_id, linear_issue_id, status, last_synced_at)
+             VALUES (?1, ?2, ?3, datetime('now'))
              ON CONFLICT(documenso_document_id) DO UPDATE SET
-                anytype_object_id = COALESCE(excluded.anytype_object_id, anytype_object_id),
                 linear_issue_id = COALESCE(excluded.linear_issue_id, linear_issue_id),
                 status = COALESCE(excluded.status, status),
                 last_synced_at = datetime('now')",
             (
                 mapping.documenso_document_id.as_str(),
-                mapping.anytype_object_id.as_deref().unwrap_or(""),
                 mapping.linear_issue_id.as_deref().unwrap_or(""),
                 mapping.status.as_deref().unwrap_or(""),
             ),
@@ -292,17 +257,16 @@ impl Db {
     pub async fn get_contract_by_documenso_id(&self, doc_id: &str) -> anyhow::Result<Option<ContractMapping>> {
         let conn = self.conn().await?;
         let mut rows = conn.query(
-            "SELECT documenso_document_id, anytype_object_id, linear_issue_id, status, last_synced_at
+            "SELECT documenso_document_id, linear_issue_id, status, last_synced_at
              FROM contract_mappings WHERE documenso_document_id = ?1",
             (doc_id,),
         ).await.map_err(|e| anyhow::anyhow!("{}", e))?;
         match rows.next().await.map_err(|e| anyhow::anyhow!("{}", e))? {
             Some(row) => Ok(Some(ContractMapping {
                 documenso_document_id: text(&row, 0),
-                anytype_object_id: opt_text(&row, 1),
-                linear_issue_id: opt_text(&row, 2),
-                status: opt_text(&row, 3),
-                last_synced_at: opt_text(&row, 4),
+                linear_issue_id: opt_text(&row, 1),
+                status: opt_text(&row, 2),
+                last_synced_at: opt_text(&row, 3),
             })),
             None => Ok(None),
         }
@@ -356,30 +320,10 @@ impl Db {
         Ok(results)
     }
 
-    pub async fn specs_missing_anytype_link(&self) -> anyhow::Result<Vec<SpecMapping>> {
-        let conn = self.conn().await?;
-        let mut rows = conn.query(
-            "SELECT linear_issue_id, anytype_object_id, linear_url, anytype_url, last_synced_at
-             FROM spec_mappings WHERE anytype_object_id IS NULL",
-            (),
-        ).await.map_err(|e| anyhow::anyhow!("{}", e))?;
-        let mut results = Vec::new();
-        while let Some(row) = rows.next().await.map_err(|e| anyhow::anyhow!("{}", e))? {
-            results.push(SpecMapping {
-                linear_issue_id: text(&row, 0),
-                anytype_object_id: opt_text(&row, 1),
-                linear_url: opt_text(&row, 2),
-                anytype_url: opt_text(&row, 3),
-                last_synced_at: opt_text(&row, 4),
-            });
-        }
-        Ok(results)
-    }
-
     pub async fn specs_missing_linear_id(&self) -> anyhow::Result<Vec<SpecMapping>> {
         let conn = self.conn().await?;
         let mut rows = conn.query(
-            "SELECT linear_issue_id, anytype_object_id, linear_url, anytype_url, last_synced_at
+            "SELECT linear_issue_id, linear_url, last_synced_at
              FROM spec_mappings WHERE linear_issue_id IS NULL OR linear_issue_id = ''",
             (),
         ).await.map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -387,10 +331,8 @@ impl Db {
         while let Some(row) = rows.next().await.map_err(|e| anyhow::anyhow!("{}", e))? {
             results.push(SpecMapping {
                 linear_issue_id: text(&row, 0),
-                anytype_object_id: opt_text(&row, 1),
-                linear_url: opt_text(&row, 2),
-                anytype_url: opt_text(&row, 3),
-                last_synced_at: opt_text(&row, 4),
+                linear_url: opt_text(&row, 1),
+                last_synced_at: opt_text(&row, 2),
             });
         }
         Ok(results)

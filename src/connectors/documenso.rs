@@ -3,7 +3,7 @@ use std::any::Any;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::pin::Pin;
 use std::future::Future;
-use crate::connector::{Connector, ConnectorStatus};
+use gluebox_core::{Connector, ConnectorStatus};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WebhookPayload {

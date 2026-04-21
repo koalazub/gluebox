@@ -1,12 +1,9 @@
 #![recursion_limit = "1024"]
 mod config;
-mod power;
 mod db;
 mod connectors;
 mod triggers;
 mod webhook;
-mod connector;
-mod registry;
 mod daemon;
 mod socket;
 mod gluebox_capnp;
@@ -60,16 +57,11 @@ async fn main() -> anyhow::Result<()> {
             let db = Arc::new(db::Db::open(&cfg.turso).await?);
 
             let listen_addr = cfg.listen_addr.clone();
-            let registry = Arc::new(registry::ConnectorRegistry::new());
+            let registry = Arc::new(gluebox_core::ConnectorRegistry::new());
 
             if let Some(ref linear_cfg) = cfg.linear {
                 let connector = Arc::new(connectors::linear::LinearConnector::new(linear_cfg.clone()));
                 registry.register("linear".into(), connector).await?;
-            }
-
-            if let Some(ref anytype_cfg) = cfg.anytype {
-                let connector = Arc::new(connectors::anytype::AnytypeConnector::new(anytype_cfg.clone()));
-                registry.register("anytype".into(), connector).await?;
             }
 
             if let Some(ref matrix_cfg) = cfg.matrix {
@@ -105,7 +97,7 @@ async fn main() -> anyhow::Result<()> {
             }
 
             let power_config = cfg.power.clone().unwrap_or_default();
-            let power = Arc::new(power::PowerManager::new(power_config)?);
+            let power = Arc::new(gluebox_core::PowerManager::new(power_config)?);
 
             let (events_tx, _) = broadcast::channel::<socket::ActivityEventData>(256);
 
@@ -136,11 +128,11 @@ async fn main() -> anyhow::Result<()> {
                 while rx.changed().await.is_ok() {
                     let current = *rx.borrow();
                     match current {
-                        power::PowerState::Active => {
+                        gluebox_core::PowerState::Active => {
                             tracing::info!("power: transitioning to Active");
                             watch_registry.resume_all().await;
                         }
-                        power::PowerState::Resting => {
+                        gluebox_core::PowerState::Resting => {
                             tracing::info!("power: transitioning to Resting");
                             watch_registry.suspend_all().await;
                         }
@@ -263,10 +255,10 @@ async fn main() -> anyhow::Result<()> {
 }
 
 pub struct AppState {
-    pub registry: Arc<registry::ConnectorRegistry>,
+    pub registry: Arc<gluebox_core::ConnectorRegistry>,
     pub db: Arc<db::Db>,
     pub config: Arc<RwLock<config::Config>>,
-    pub power: Arc<power::PowerManager>,
+    pub power: Arc<gluebox_core::PowerManager>,
     pub started_at: std::time::Instant,
     pub events_tx: broadcast::Sender<socket::ActivityEventData>,
     pub error_rollup: Arc<triggers::error_rollup::ErrorRollup>,

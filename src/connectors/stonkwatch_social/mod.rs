@@ -19,7 +19,7 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use tokio::sync::Mutex;
 use tracing::{error, info, warn};
 
-use crate::connector::{Connector, ConnectorStatus};
+use gluebox_core::{Connector, ConnectorStatus};
 use crate::config::StonkwatchSocialConfig;
 use platform::{SocialPlatform, SocialPost};
 

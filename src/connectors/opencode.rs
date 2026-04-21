@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use std::pin::Pin;
 use std::future::Future;
 use tokio::sync::Mutex;
-use crate::connector::{Connector, ConnectorStatus};
+use gluebox_core::{Connector, ConnectorStatus};
 
 #[derive(Clone)]
 pub struct OpenCodeClient {
