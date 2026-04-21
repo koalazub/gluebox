@@ -151,7 +151,7 @@ impl AffineClient {
             format!("# {title}\n\n{markdown}")
         };
         tokio::fs::write(&path, &content).await?;
-        tracing::info!(path = %path.display(), "wrote local study doc (fallback)");
+        tracing::info!(path = %path.display(), "wrote local fallback doc");
         Ok(path.display().to_string())
     }
 

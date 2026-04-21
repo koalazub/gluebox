@@ -72,16 +72,6 @@ pub fn tool_registry() -> Vec<ToolEntry> {
             example: "gluebox status",
         },
         ToolEntry {
-            name: "gluebox.import",
-            description: "Import a session into gluebox",
-            example: "gluebox import <session_id>",
-        },
-        ToolEntry {
-            name: "gluebox.study",
-            description: "Run gluebox study mode",
-            example: "gluebox study",
-        },
-        ToolEntry {
             name: "gluebox.toggle",
             description: "Toggle a gluebox connector",
             example: "gluebox toggle <connector>",

@@ -31,8 +31,6 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/admin/reload", post(admin_reload))
         .route("/admin/spike", post(admin_spike))
         .route("/admin/power", get(admin_power))
-        .route("/api/sessions", get(list_sessions))
-        .route("/api/study-plan", post(create_study_plan))
         .route("/api/doc", post(create_doc))
         .route("/api/social/generate", post(generate_social_post))
         .route("/api/social/post", post(publish_social_post))
@@ -663,33 +661,6 @@ async fn admin_power(
     }))
 }
 
-async fn list_sessions(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-) -> Result<Json<serde_json::Value>, StatusCode> {
-    check_admin_auth(&state, &headers).await?;
-    match state.db.list_imports().await {
-        Ok(imports) => {
-            let items: Vec<serde_json::Value> = imports.iter().map(|i| {
-                serde_json::json!({
-                    "session_id": i.session_id,
-                    "session_title": i.session_title,
-                    "affine_doc_id": i.affine_doc_id,
-                    "calendar_name": i.calendar_name,
-                    "event_title": i.event_title,
-                    "imported_at": i.imported_at,
-                })
-            }).collect();
-            Ok(Json(serde_json::json!({"sessions": items})))
-        }
-        Err(e) => {
-            tracing::error!("list_sessions failed: {e}");
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
-        }
-    }
-}
-
-
 #[derive(Deserialize)]
 struct CreateDocRequest {
     title: String,
@@ -709,27 +680,6 @@ async fn create_doc(
             Err(e) => Ok(Json(serde_json::json!({"error": e.to_string()}))),
         },
         Err(e) => Ok(Json(serde_json::json!({"error": e.to_string()}))),
-    }
-}
-
-#[derive(Deserialize)]
-struct StudyPlanRequest {
-    period: String,
-    course: Option<String>,
-}
-
-async fn create_study_plan(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    Json(req): Json<StudyPlanRequest>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
-    check_admin_auth(&state, &headers).await?;
-    match triggers::study_plan::generate_plan(&state, &req.period, req.course.as_deref()).await {
-        Ok(msg) => Ok(Json(serde_json::json!({"result": msg}))),
-        Err(e) => {
-            tracing::error!("create_study_plan failed: {e}");
-            Ok(Json(serde_json::json!({"error": e.to_string()})))
-        }
     }
 }
 

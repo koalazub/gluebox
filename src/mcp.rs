@@ -7,11 +7,6 @@ use rmcp::{
 };
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-struct ImportSessionInput {
-    session_id: String,
-}
-
-#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 struct SocialPostInput {
     /// The post text to publish
     text: String,
@@ -23,12 +18,6 @@ struct SocialPostInput {
 struct GenerateSocialInput {
     /// Optional: filter by stock symbol (e.g. "BHP")
     symbol: Option<String>,
-}
-
-#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-struct StudyPlanInput {
-    period: String,
-    course: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -67,100 +56,6 @@ impl GlueboxMcp {
             auth_token,
             tool_router: Self::tool_router(),
         }
-    }
-
-    #[tool(description = "List imported lecture sessions")]
-    async fn list_sessions(&self) -> Result<CallToolResult, McpError> {
-        let resp = self
-            .client
-            .get(format!("{}/api/sessions", self.base_url))
-            .header("Authorization", self.auth_header())
-            .send()
-            .await
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        let body = resp
-            .text()
-            .await
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        Ok(CallToolResult::success(vec![Content::text(body)]))
-    }
-
-    #[tool(description = "Import latest unimported uni session")]
-    async fn import_latest(&self) -> Result<CallToolResult, McpError> {
-        let resp = self
-            .client
-            .post(format!("{}/api/import", self.base_url))
-            .header("Authorization", self.auth_header())
-            .send()
-            .await
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        let body = resp
-            .text()
-            .await
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        Ok(CallToolResult::success(vec![Content::text(body)]))
-    }
-
-    #[tool(description = "Batch import all unimported uni sessions")]
-    async fn import_all(&self) -> Result<CallToolResult, McpError> {
-        let resp = self
-            .client
-            .post(format!("{}/api/import/all", self.base_url))
-            .header("Authorization", self.auth_header())
-            .send()
-            .await
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        let body = resp
-            .text()
-            .await
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        Ok(CallToolResult::success(vec![Content::text(body)]))
-    }
-
-    #[tool(description = "Import specific session by ID")]
-    async fn import_session(
-        &self,
-        Parameters(input): Parameters<ImportSessionInput>,
-    ) -> Result<CallToolResult, McpError> {
-        let resp = self
-            .client
-            .post(format!(
-                "{}/api/import/{}",
-                self.base_url, input.session_id
-            ))
-            .header("Authorization", self.auth_header())
-            .send()
-            .await
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        let body = resp
-            .text()
-            .await
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        Ok(CallToolResult::success(vec![Content::text(body)]))
-    }
-
-    #[tool(description = "Generate study plan for a period")]
-    async fn create_study_plan(
-        &self,
-        Parameters(input): Parameters<StudyPlanInput>,
-    ) -> Result<CallToolResult, McpError> {
-        let mut body = serde_json::json!({ "period": input.period });
-        if let Some(course) = input.course {
-            body["course"] = serde_json::Value::String(course);
-        }
-        let resp = self
-            .client
-            .post(format!("{}/api/study-plan", self.base_url))
-            .header("Authorization", self.auth_header())
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        let text = resp
-            .text()
-            .await
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        Ok(CallToolResult::success(vec![Content::text(text)]))
     }
 
     #[tool(description = "Create a document in AFFine. Use 'workspace' to target a specific workspace (e.g. 'default', 'stonkington'). Omit for the default workspace.")]
@@ -313,7 +208,7 @@ impl ServerHandler for GlueboxMcp {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("gluebox", env!("CARGO_PKG_VERSION")))
             .with_instructions(
-                "Gluebox daemon proxy. Manage lecture sessions, study plans, connectors, and Stonkwatch social media posting (X, Bluesky, Instagram, Facebook)."
+                "Gluebox daemon proxy. Manage connectors, create Affine documents, and drive Stonkwatch social media posting (X, Bluesky, Instagram, Facebook)."
                     .to_string(),
             )
     }

@@ -96,7 +96,7 @@ pub struct MatrixConfig {
 
 fn default_output_dir() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-    PathBuf::from(home).join("Documents/gluebox-study")
+    PathBuf::from(home).join("Documents/gluebox")
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
