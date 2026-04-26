@@ -1901,6 +1901,7 @@ dependencies = [
 [[package]]
 name = "gluebox-core"
 version = "0.1.0"
+source = "git+https://github.com/koalazub/gluebox-core?branch=main#8a2bf13579f1d19d6091a030bf3162b94b908d8a"
 dependencies = [
  "anyhow",
  "serde",
