@@ -6,6 +6,7 @@ pub mod feedback;
 pub mod trending_to_social;
 pub mod friday_digest;
 pub mod error_rollup;
+pub mod posting_heartbeat;
 
 pub use documenso_handlers::{documenso_completed, documenso_rejected};
 pub use github_to_linear::github_issue_opened;

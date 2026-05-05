@@ -65,6 +65,8 @@ pub async fn handle_trending_entity(
         }
     };
 
+    state.heartbeat.record_candidate_seen();
+
     let candidate = build_candidate(&social_cfg, announcement, &state.error_rollup).await;
     let social_post = candidate.to_social_post();
     let platforms = StonkwatchSocialConnector::build_platforms(&social_cfg);
@@ -77,6 +79,7 @@ pub async fn handle_trending_entity(
     for platform in &platforms {
         match platform.publish(&social_post).await {
             Ok(result) => {
+                state.heartbeat.record_publish_success(&result.platform).await;
                 info!(ticker = entity_id, platform = result.platform, id = %result.id, "trending: posted");
                 published_somewhere = true;
             }

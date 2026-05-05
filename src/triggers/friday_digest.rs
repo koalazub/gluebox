@@ -212,6 +212,7 @@ pub async fn run_if_scheduled(state: &Arc<AppState>) -> Result<()> {
         }
         match platform.publish(&social_post).await {
             Ok(result) => {
+                state.heartbeat.record_publish_success(&result.platform).await;
                 info!(platform = result.platform, id = %result.id, "friday_digest: montage posted");
                 published = true;
             }

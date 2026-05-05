@@ -102,6 +102,7 @@ jobs:
           {
             printf '\n[stonkwatch_social]\n'
             printf 'auto_post = true\n'
+            printf 'trending_webhook_driven = false\n'
             printf 'openrouter_api_key = "%s"\n' "$STONKWATCH_OPENROUTER_API_KEY"
             printf 'turso_url = "%s"\n' "$STONKWATCH_TURSO_URL"
             printf 'turso_auth_token = "%s"\n' "$STONKWATCH_TURSO_AUTH_TOKEN"
