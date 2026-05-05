@@ -31,6 +31,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/admin/reload", post(admin_reload))
         .route("/admin/spike", post(admin_spike))
         .route("/admin/power", get(admin_power))
+        .route("/admin/heartbeat", get(admin_heartbeat))
         .route("/api/doc", post(create_doc))
         .route("/api/social/generate", post(generate_social_post))
         .route("/api/social/post", post(publish_social_post))
@@ -488,6 +489,8 @@ async fn handle_trending(
         return Err(StatusCode::UNAUTHORIZED);
     }
 
+    state.heartbeat.record_webhook_received();
+
     let received = req.entities.len();
     let mut posted = 0usize;
     let mut skipped = 0usize;
@@ -659,6 +662,15 @@ async fn admin_power(
         potential: state.power.potential(),
         threshold: state.power.threshold(),
     }))
+}
+
+async fn admin_heartbeat(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Json<crate::triggers::posting_heartbeat::HeartbeatSnapshot>, StatusCode> {
+    check_admin_auth(&state, &headers).await?;
+    let expected = state.heartbeat.expected_platforms().await;
+    Ok(Json(state.heartbeat.snapshot_with_expected(&expected).await))
 }
 
 #[derive(Deserialize)]

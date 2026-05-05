@@ -89,9 +89,22 @@ async fn main() -> anyhow::Result<()> {
                 registry.register("affine".into(), connector).await?;
             }
 
+            let heartbeat = triggers::posting_heartbeat::PostingHeartbeat::new();
+
+            if let Some(social_cfg) = cfg.stonkwatch_social.as_ref() {
+                heartbeat
+                    .set_expected_platforms(
+                        triggers::posting_heartbeat::expected_platforms_from_config(social_cfg),
+                    )
+                    .await;
+            }
+
             if let Some(ref social_cfg) = cfg.stonkwatch_social {
                 let connector = Arc::new(
-                    connectors::stonkwatch_social::StonkwatchSocialConnector::new(social_cfg.clone()),
+                    connectors::stonkwatch_social::StonkwatchSocialConnector::new(
+                        social_cfg.clone(),
+                        heartbeat.clone(),
+                    ),
                 );
                 registry.register("stonkwatch_social".into(), connector).await?;
             }
@@ -103,6 +116,8 @@ async fn main() -> anyhow::Result<()> {
 
             let error_rollup = triggers::error_rollup::ErrorRollup::new();
 
+            triggers::posting_heartbeat::spawn_watchdog(heartbeat.clone(), error_rollup.clone());
+
             let state = Arc::new(AppState {
                 registry: registry.clone(),
                 db,
@@ -111,6 +126,7 @@ async fn main() -> anyhow::Result<()> {
                 started_at: std::time::Instant::now(),
                 events_tx: events_tx.clone(),
                 error_rollup: error_rollup.clone(),
+                heartbeat: heartbeat.clone(),
             });
 
             let tick_power = state.power.clone();
@@ -262,4 +278,5 @@ pub struct AppState {
     pub started_at: std::time::Instant,
     pub events_tx: broadcast::Sender<socket::ActivityEventData>,
     pub error_rollup: Arc<triggers::error_rollup::ErrorRollup>,
+    pub heartbeat: Arc<triggers::posting_heartbeat::PostingHeartbeat>,
 }

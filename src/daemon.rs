@@ -152,24 +152,43 @@ pub async fn reload(state: &Arc<AppState>) -> anyhow::Result<String> {
 
     match (&old_cfg.stonkwatch_social, &new_cfg.stonkwatch_social) {
         (None, Some(new)) => {
+            state
+                .heartbeat
+                .set_expected_platforms(
+                    crate::triggers::posting_heartbeat::expected_platforms_from_config(new),
+                )
+                .await;
             let connector = Arc::new(
-                connectors::stonkwatch_social::StonkwatchSocialConnector::new(new.clone()),
+                connectors::stonkwatch_social::StonkwatchSocialConnector::new(
+                    new.clone(),
+                    state.heartbeat.clone(),
+                ),
             );
             state.registry.register("stonkwatch_social".into(), connector).await?;
             changes.push("stonkwatch_social: added".into());
         }
         (Some(_), None) => {
+            state.heartbeat.set_expected_platforms(Vec::new()).await;
             state.registry.deregister("stonkwatch_social").await?;
             changes.push("stonkwatch_social: removed".into());
         }
         (Some(old), Some(new)) if old != new => {
+            state
+                .heartbeat
+                .set_expected_platforms(
+                    crate::triggers::posting_heartbeat::expected_platforms_from_config(new),
+                )
+                .await;
             if let Some(conn) = state.registry.get_dyn("stonkwatch_social").await {
                 let toml_val = toml::Value::try_from(new.clone())?;
                 let reconfigured = conn.reconfigure(&toml_val).await?;
                 if !reconfigured {
                     state.registry.deregister("stonkwatch_social").await?;
                     let connector = Arc::new(
-                        connectors::stonkwatch_social::StonkwatchSocialConnector::new(new.clone()),
+                        connectors::stonkwatch_social::StonkwatchSocialConnector::new(
+                            new.clone(),
+                            state.heartbeat.clone(),
+                        ),
                     );
                     state.registry.register("stonkwatch_social".into(), connector).await?;
                 }

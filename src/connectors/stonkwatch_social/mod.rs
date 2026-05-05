@@ -15,12 +15,14 @@ use std::any::Any;
 use std::collections::HashSet;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 use tokio::sync::Mutex;
 use tracing::{error, info, warn};
 
 use gluebox_core::{Connector, ConnectorStatus};
 use crate::config::StonkwatchSocialConfig;
+use crate::triggers::posting_heartbeat::PostingHeartbeat;
 use platform::{SocialPlatform, SocialPost};
 
 const PROMO_MESSAGES: &[(&str, &str)] = &[
@@ -54,15 +56,17 @@ pub struct StonkwatchSocialConnector {
     status: AtomicU8,
     error_msg: Mutex<Option<String>>,
     task_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    heartbeat: Arc<PostingHeartbeat>,
 }
 
 impl StonkwatchSocialConnector {
-    pub fn new(config: StonkwatchSocialConfig) -> Self {
+    pub fn new(config: StonkwatchSocialConfig, heartbeat: Arc<PostingHeartbeat>) -> Self {
         Self {
             config: Mutex::new(config),
             status: AtomicU8::new(ConnectorStatus::Stopped.as_u8()),
             error_msg: Mutex::new(None),
             task_handle: Mutex::new(None),
+            heartbeat,
         }
     }
 
@@ -100,7 +104,7 @@ impl StonkwatchSocialConnector {
         platforms
     }
 
-    async fn run_posting_loop(config: StonkwatchSocialConfig) {
+    async fn run_posting_loop(config: StonkwatchSocialConfig, heartbeat: Arc<PostingHeartbeat>) {
         let interval_secs = config.post_interval_secs.unwrap_or(21600);
         let max_posts = config.max_posts_per_cycle.max(1) as usize;
         let platforms = Self::build_platforms(&config);
@@ -146,10 +150,11 @@ impl StonkwatchSocialConnector {
                     if to_post.is_empty() {
                         info!(trending_only = config.trending_only, "No new announcements to post about");
                     } else if config.auto_post {
+                        heartbeat.record_candidate_seen();
                         info!("Auto-posting {} updates across platforms", to_post.len());
                         for post in &to_post {
                             let social_post = post.to_social_post();
-                            Self::post_to_all_platforms(&platforms, &social_post).await;
+                            Self::post_to_all_platforms(&platforms, &social_post, &heartbeat).await;
                             posted_ids.insert(post.announcement_id.clone());
                             tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                         }
@@ -191,7 +196,7 @@ impl StonkwatchSocialConnector {
                     video_mp4_path: None,
                 };
                 info!("Posting promo message {}", promo_index + 1);
-                Self::post_to_all_platforms(&platforms, &promo).await;
+                Self::post_to_all_platforms(&platforms, &promo, &heartbeat).await;
                 promo_index += 1;
             }
 
@@ -256,6 +261,7 @@ impl StonkwatchSocialConnector {
     async fn post_to_all_platforms(
         platforms: &[Box<dyn SocialPlatform>],
         post: &SocialPost,
+        heartbeat: &PostingHeartbeat,
     ) {
         for platform in platforms {
             if !platform.accepts(post) {
@@ -263,7 +269,10 @@ impl StonkwatchSocialConnector {
                 continue;
             }
             match platform.publish(post).await {
-                Ok(result) => info!(platform = result.platform, id = %result.id, "Posted"),
+                Ok(result) => {
+                    heartbeat.record_publish_success(&result.platform).await;
+                    info!(platform = result.platform, id = %result.id, "Posted");
+                }
                 Err(e) => error!(platform = platform.name(), error = %e, "Failed to post"),
             }
         }
@@ -297,7 +306,7 @@ impl Connector for StonkwatchSocialConnector {
             if config.trending_webhook_driven {
                 info!("Stonkwatch social connector started in webhook-driven mode (no posting loop)");
             } else {
-                let handle = tokio::spawn(Self::run_posting_loop(config));
+                let handle = tokio::spawn(Self::run_posting_loop(config, self.heartbeat.clone()));
                 *self.task_handle.lock().await = Some(handle);
                 info!("Stonkwatch social connector started (legacy timer loop)");
             }
