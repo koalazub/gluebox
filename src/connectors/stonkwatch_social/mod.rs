@@ -124,7 +124,7 @@ impl StonkwatchSocialConnector {
             let db = match replica::open_synced_replica(&config).await {
                 Ok(db) => db,
                 Err(e) => {
-                    error!(error = %e, "Failed to open synced Stonkwatch replica");
+                    error!(error = format!("{e:#}"), "Failed to open synced Stonkwatch replica");
                     tokio::time::sleep(std::time::Duration::from_secs(interval_secs)).await;
                     continue;
                 }
@@ -133,7 +133,7 @@ impl StonkwatchSocialConnector {
             let conn = match db.connect().await {
                 Ok(c) => c,
                 Err(e) => {
-                    error!(error = %e, "Failed to get Turso connection");
+                    error!(error = format!("{e:#}"), "Failed to get Turso connection");
                     tokio::time::sleep(std::time::Duration::from_secs(interval_secs)).await;
                     continue;
                 }
@@ -175,7 +175,7 @@ impl StonkwatchSocialConnector {
                     }
                 }
                 Err(e) => {
-                    error!(error = %e, "Failed to fetch post candidates");
+                    error!(error = format!("{e:#}"), "Failed to fetch post candidates");
                 }
             }
 
@@ -273,7 +273,7 @@ impl StonkwatchSocialConnector {
                     heartbeat.record_publish_success(&result.platform).await;
                     info!(platform = result.platform, id = %result.id, "Posted");
                 }
-                Err(e) => error!(platform = platform.name(), error = %e, "Failed to post"),
+                Err(e) => error!(platform = platform.name(), error = format!("{e:#}"), "Failed to post"),
             }
         }
     }
