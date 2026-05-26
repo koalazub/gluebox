@@ -17,6 +17,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
+use std::time::Duration;
 use tokio::sync::Mutex;
 use tracing::{error, info, warn};
 
@@ -121,86 +122,119 @@ impl StonkwatchSocialConnector {
             cycle_count += 1;
             info!("Stonkwatch social: checking for content to post");
 
-            let db = match replica::open_synced_replica(&config).await {
-                Ok(db) => db,
-                Err(e) => {
-                    error!(error = format!("{e:#}"), "Failed to open synced Stonkwatch replica");
-                    tokio::time::sleep(std::time::Duration::from_secs(interval_secs)).await;
-                    continue;
-                }
-            };
+            // Cap the whole cycle so any future that hangs (turso pull, reqwest
+            // with no timeout, etc.) can't wedge the loop forever like it did
+            // for a week before. Budget: 15min, generous for image uploads +
+            // sequential platform posts + the 5s spacer per post.
+            let cycle_budget = Duration::from_secs(900);
+            let promo_interval = if is_asx_market_hours() { 6 } else { 12 };
+            let promo_should_post = cycle_count % promo_interval == 0;
+            let promo_idx = promo_index;
+            let posted_ids_snapshot = posted_ids.clone();
+            let cfg_ref = &config;
+            let platforms_ref = &platforms;
+            let heartbeat_ref = &heartbeat;
 
-            let conn = match db.connect().await {
-                Ok(c) => c,
-                Err(e) => {
-                    error!(error = format!("{e:#}"), "Failed to get Turso connection");
-                    tokio::time::sleep(std::time::Duration::from_secs(interval_secs)).await;
-                    continue;
-                }
-            };
+            let cycle_fut = async move {
+                let mut newly_posted: Vec<String> = Vec::new();
 
-            match content::fetch_post_candidates(&conn, &config, &posted_ids).await {
-                Ok(candidates) => {
-                    let filtered: Vec<_> = if config.trending_only {
-                        candidates.into_iter().filter(|c| c.is_price_sensitive()).collect()
-                    } else {
-                        candidates
-                    };
-                    let to_post: Vec<_> = filtered.into_iter().take(max_posts).collect();
-                    if to_post.is_empty() {
-                        info!(trending_only = config.trending_only, "No new announcements to post about");
-                    } else if config.auto_post {
-                        heartbeat.record_candidate_seen();
-                        info!("Auto-posting {} updates across platforms", to_post.len());
-                        for post in &to_post {
-                            let social_post = post.to_social_post();
-                            Self::post_to_all_platforms(&platforms, &social_post, &heartbeat).await;
-                            posted_ids.insert(post.announcement_id.clone());
-                            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                let db = match replica::open_synced_replica(cfg_ref).await {
+                    Ok(db) => db,
+                    Err(e) => {
+                        error!(error = format!("{e:#}"), "Failed to open synced Stonkwatch replica");
+                        return newly_posted;
+                    }
+                };
+
+                let conn = match db.connect().await {
+                    Ok(c) => c,
+                    Err(e) => {
+                        error!(error = format!("{e:#}"), "Failed to get Turso connection");
+                        return newly_posted;
+                    }
+                };
+
+                match content::fetch_post_candidates(&conn, cfg_ref, &posted_ids_snapshot).await {
+                    Ok(candidates) => {
+                        let filtered: Vec<_> = if cfg_ref.trending_only {
+                            candidates.into_iter().filter(|c| c.is_price_sensitive()).collect()
+                        } else {
+                            candidates
+                        };
+                        let to_post: Vec<_> = filtered.into_iter().take(max_posts).collect();
+                        if to_post.is_empty() {
+                            info!(trending_only = cfg_ref.trending_only, "No new announcements to post about");
+                        } else if cfg_ref.auto_post {
+                            heartbeat_ref.record_candidate_seen();
+                            info!("Auto-posting {} updates across platforms", to_post.len());
+                            for post in &to_post {
+                                let social_post = post.to_social_post();
+                                Self::post_to_all_platforms(platforms_ref, &social_post, heartbeat_ref).await;
+                                newly_posted.push(post.announcement_id.clone());
+                                tokio::time::sleep(Duration::from_secs(5)).await;
+                            }
+                        } else if cfg_ref.review_room_id.is_some() {
+                            info!("Sending {} posts to Matrix for review", to_post.len());
+                            for (i, post) in to_post.iter().enumerate() {
+                                let preview = format!(
+                                    "📋 **Post {}/{}**\n\n{}\n\n_React ✅ to approve, ❌ to reject_",
+                                    i + 1,
+                                    to_post.len(),
+                                    post.text
+                                );
+                                Self::send_to_review(cfg_ref, &preview).await;
+                                newly_posted.push(post.announcement_id.clone());
+                            }
+                        } else {
+                            info!("auto_post=false and no review_room_id — {} posts generated but not sent", to_post.len());
                         }
-                    } else if config.review_room_id.is_some() {
-                        info!("Sending {} posts to Matrix for review", to_post.len());
-                        for (i, post) in to_post.iter().enumerate() {
-                            let preview = format!(
-                                "📋 **Post {}/{}**\n\n{}\n\n_React ✅ to approve, ❌ to reject_",
-                                i + 1,
-                                to_post.len(),
-                                post.text
-                            );
-                            Self::send_to_review(&config, &preview).await;
-                            posted_ids.insert(post.announcement_id.clone());
-                        }
-                    } else {
-                        info!("auto_post=false and no review_room_id — {} posts generated but not sent", to_post.len());
+                    }
+                    Err(e) => {
+                        error!(error = format!("{e:#}"), "Failed to fetch post candidates");
                     }
                 }
-                Err(e) => {
-                    error!(error = format!("{e:#}"), "Failed to fetch post candidates");
+
+                if promo_should_post {
+                    let (text, link) = PROMO_MESSAGES[promo_idx % PROMO_MESSAGES.len()];
+                    let promo = SocialPost {
+                        text: text.to_string(),
+                        link: link.to_string(),
+                        image_url: None,
+                        story_image_url: None,
+                        og_title: "Stonkwatch — ASX Market Intelligence".to_string(),
+                        og_description: "AI-powered ASX announcement summaries, sentiment tracking, and market analysis.".to_string(),
+                        video_mp4_path: None,
+                    };
+                    info!("Posting promo message {}", promo_idx + 1);
+                    Self::post_to_all_platforms(platforms_ref, &promo, heartbeat_ref).await;
+                }
+
+                newly_posted
+            };
+
+            match tokio::time::timeout(cycle_budget, cycle_fut).await {
+                Ok(newly_posted) => {
+                    for id in newly_posted {
+                        posted_ids.insert(id);
+                    }
+                }
+                Err(_) => {
+                    error!(
+                        cycle = cycle_count,
+                        timeout_secs = cycle_budget.as_secs(),
+                        "Stonkwatch social: cycle timed out, dropping in-flight work and retrying next interval"
+                    );
                 }
             }
 
+            if promo_should_post {
+                promo_index += 1;
+            }
             if posted_ids.len() > 500 {
                 posted_ids.clear();
             }
 
-            let promo_interval = if is_asx_market_hours() { 6 } else { 12 };
-            if cycle_count % promo_interval == 0 {
-                let (text, link) = PROMO_MESSAGES[promo_index % PROMO_MESSAGES.len()];
-                let promo = SocialPost {
-                    text: text.to_string(),
-                    link: link.to_string(),
-                    image_url: None,
-                    story_image_url: None,
-                    og_title: "Stonkwatch — ASX Market Intelligence".to_string(),
-                    og_description: "AI-powered ASX announcement summaries, sentiment tracking, and market analysis.".to_string(),
-                    video_mp4_path: None,
-                };
-                info!("Posting promo message {}", promo_index + 1);
-                Self::post_to_all_platforms(&platforms, &promo, &heartbeat).await;
-                promo_index += 1;
-            }
-
-            tokio::time::sleep(std::time::Duration::from_secs(interval_secs)).await;
+            tokio::time::sleep(Duration::from_secs(interval_secs)).await;
         }
     }
 

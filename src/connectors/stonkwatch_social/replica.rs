@@ -1,4 +1,7 @@
-use anyhow::Context;
+use std::time::Duration;
+
+use anyhow::{anyhow, Context};
+use tokio::time::timeout;
 use tracing::{debug, info, warn};
 use turso::sync::{PartialBootstrapStrategy, PartialSyncOpts};
 
@@ -26,6 +29,17 @@ const PARTIAL_SEGMENT_SIZE: usize = 128 * 1024;
 // turso-documented corruption/panic footgun for read-only replicas, so only
 // checkpoint once the WAL has actually accumulated past this threshold.
 const WAL_CHECKPOINT_THRESHOLD_BYTES: u64 = 32 * 1024 * 1024;
+
+// turso's sync IoWorker uses raw hyper with no HTTP timeout. A stalled
+// connection to the remote (TCP black hole, slow DNS, server hang) makes
+// build()/pull() never return, wedging the posting loop forever and silently
+// halting all social posting. Cap each operation so a single bad request can't
+// brick the loop — on timeout we treat it as a transient failure and the next
+// cycle retries.
+const BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(180); // initial bootstrap downloads many pages
+const PULL_TIMEOUT: Duration = Duration::from_secs(120);
+const STATS_TIMEOUT: Duration = Duration::from_secs(10);
+const CHECKPOINT_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Substrings that indicate the *local* replica files are corrupt/truncated
 /// (as opposed to a transient network or auth failure). Re-bootstrapping is
@@ -87,20 +101,29 @@ async fn try_open(cfg: &StonkwatchSocialConfig) -> anyhow::Result<turso::sync::D
         prefetch: true,
     };
 
-    let db = turso::sync::Builder::new_remote(REPLICA_PATH)
+    let build_fut = turso::sync::Builder::new_remote(REPLICA_PATH)
         .with_remote_url(&cfg.turso_url)
         .with_auth_token(&cfg.turso_auth_token)
         .with_client_name("gluebox-stonkwatch-replica")
         .bootstrap_if_empty(true)
         .with_partial_sync_opts_experimental(partial_opts)
-        .build()
-        .await
-        .context("open stonkwatch turso replica")?;
+        .build();
 
-    match db.pull().await {
-        Ok(true) => debug!("stonkwatch turso replica: pulled new changes"),
-        Ok(false) => debug!("stonkwatch turso replica: already up to date"),
-        Err(e) => {
+    let db = match timeout(BOOTSTRAP_TIMEOUT, build_fut).await {
+        Ok(Ok(db)) => db,
+        Ok(Err(e)) => return Err(anyhow!(e)).context("open stonkwatch turso replica"),
+        Err(_) => {
+            return Err(anyhow!(
+                "open stonkwatch turso replica: timed out after {}s",
+                BOOTSTRAP_TIMEOUT.as_secs()
+            ))
+        }
+    };
+
+    match timeout(PULL_TIMEOUT, db.pull()).await {
+        Ok(Ok(true)) => debug!("stonkwatch turso replica: pulled new changes"),
+        Ok(Ok(false)) => debug!("stonkwatch turso replica: already up to date"),
+        Ok(Err(e)) => {
             let e = anyhow::Error::new(e);
             // A corrupt local copy makes every later query fail too — surface it
             // so the caller wipes and re-bootstraps instead of limping along.
@@ -112,24 +135,43 @@ async fn try_open(cfg: &StonkwatchSocialConfig) -> anyhow::Result<turso::sync::D
                 "stonkwatch turso replica: pull failed, continuing with local state"
             );
         }
+        Err(_) => {
+            warn!(
+                timeout_secs = PULL_TIMEOUT.as_secs(),
+                "stonkwatch turso replica: pull timed out, continuing with local state"
+            );
+        }
     }
 
-    if let Ok(stats) = db.stats().await {
-        if stats.main_wal_size as u64 > WAL_CHECKPOINT_THRESHOLD_BYTES {
-            if let Err(e) = db.checkpoint().await {
-                // Don't fail the open — the next cycle's open will detect and
-                // heal any corruption a bad checkpoint may have introduced.
-                warn!(error = %e, wal_bytes = stats.main_wal_size, "stonkwatch turso replica: checkpoint failed");
-            } else {
-                debug!(wal_bytes = stats.main_wal_size, "stonkwatch turso replica: checkpointed oversized WAL");
+    match timeout(STATS_TIMEOUT, db.stats()).await {
+        Ok(Ok(stats)) => {
+            if stats.main_wal_size as u64 > WAL_CHECKPOINT_THRESHOLD_BYTES {
+                match timeout(CHECKPOINT_TIMEOUT, db.checkpoint()).await {
+                    Ok(Ok(())) => debug!(
+                        wal_bytes = stats.main_wal_size,
+                        "stonkwatch turso replica: checkpointed oversized WAL"
+                    ),
+                    Ok(Err(e)) => warn!(
+                        error = %e,
+                        wal_bytes = stats.main_wal_size,
+                        "stonkwatch turso replica: checkpoint failed"
+                    ),
+                    Err(_) => warn!(
+                        timeout_secs = CHECKPOINT_TIMEOUT.as_secs(),
+                        wal_bytes = stats.main_wal_size,
+                        "stonkwatch turso replica: checkpoint timed out"
+                    ),
+                }
             }
+            info!(
+                wal_bytes = stats.main_wal_size,
+                net_recv = stats.network_received_bytes,
+                net_sent = stats.network_sent_bytes,
+                "stonkwatch turso replica: sync stats"
+            );
         }
-        info!(
-            wal_bytes = stats.main_wal_size,
-            net_recv = stats.network_received_bytes,
-            net_sent = stats.network_sent_bytes,
-            "stonkwatch turso replica: sync stats"
-        );
+        Ok(Err(e)) => debug!(error = %e, "stonkwatch turso replica: stats unavailable"),
+        Err(_) => debug!("stonkwatch turso replica: stats timed out"),
     }
 
     Ok(db)
