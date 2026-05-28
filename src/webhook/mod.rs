@@ -24,6 +24,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/webhooks/github", post(handle_github))
         .route("/webhooks/trending", post(handle_trending))
         .route("/api/notify", post(handle_notify))
+        .route("/api/grafana-webhook", post(handle_grafana_alert))
         .route("/api/feedback", post(handle_feedback))
         .route("/admin/status", get(admin_status))
         .route("/admin/connectors", get(admin_connectors))
@@ -438,6 +439,296 @@ async fn handle_notify(
             tracing::error!(%e, room = target, "notify: failed to send to matrix");
             StatusCode::INTERNAL_SERVER_ERROR
         }
+    }
+}
+
+#[derive(Deserialize)]
+struct GrafanaAlertItem {
+    #[serde(default)]
+    status: String,
+    #[serde(default)]
+    labels: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    annotations: std::collections::BTreeMap<String, String>,
+    #[serde(default, rename = "generatorURL")]
+    generator_url: String,
+    #[serde(default, rename = "startsAt")]
+    starts_at: String,
+}
+
+#[derive(Deserialize)]
+struct GrafanaWebhookPayload {
+    #[serde(default)]
+    status: String,
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    message: String,
+    #[serde(default)]
+    alerts: Vec<GrafanaAlertItem>,
+    #[serde(default, rename = "commonLabels")]
+    common_labels: std::collections::BTreeMap<String, String>,
+    #[serde(default, rename = "externalURL")]
+    external_url: String,
+}
+
+fn format_grafana_alerts(payload: &GrafanaWebhookPayload) -> String {
+    let outcome_icon = match payload.status.as_str() {
+        "firing" => "[FIRING]",
+        "resolved" => "[RESOLVED]",
+        other if !other.is_empty() => other,
+        _ => "[ALERT]",
+    };
+    let header = if !payload.title.is_empty() {
+        format!("{} {}", outcome_icon, payload.title)
+    } else {
+        outcome_icon.to_string()
+    };
+
+    let mut lines: Vec<String> = Vec::new();
+    lines.push(header);
+
+    let severity = payload
+        .common_labels
+        .get("severity")
+        .map(String::as_str)
+        .unwrap_or("");
+    if !severity.is_empty() {
+        lines.push(format!("severity: {severity}"));
+    }
+
+    for alert in payload.alerts.iter().take(6) {
+        let name = alert
+            .labels
+            .get("alertname")
+            .map(String::as_str)
+            .unwrap_or("(unnamed alert)");
+        let summary = alert
+            .annotations
+            .get("summary")
+            .map(String::as_str)
+            .unwrap_or("");
+        let runbook = alert
+            .annotations
+            .get("runbook_url")
+            .or_else(|| alert.annotations.get("runbook"))
+            .map(String::as_str)
+            .unwrap_or("");
+        let mut line = format!("  • {name} [{}]", alert.status);
+        if !summary.is_empty() {
+            line.push_str(": ");
+            line.push_str(summary);
+        }
+        if !alert.starts_at.is_empty() {
+            line.push_str(" (started ");
+            line.push_str(&alert.starts_at);
+            line.push(')');
+        }
+        if !runbook.is_empty() {
+            line.push_str("\n    runbook: ");
+            line.push_str(runbook);
+        } else if !alert.generator_url.is_empty() {
+            line.push_str("\n    ");
+            line.push_str(&alert.generator_url);
+        }
+        lines.push(line);
+    }
+    if payload.alerts.len() > 6 {
+        lines.push(format!(
+            "  … {} additional alerts not shown",
+            payload.alerts.len() - 6
+        ));
+    }
+
+    if !payload.message.is_empty() && payload.alerts.is_empty() {
+        lines.push(payload.message.clone());
+    }
+
+    if !payload.external_url.is_empty() {
+        lines.push(format!("dashboard: {}", payload.external_url));
+    }
+
+    lines.join("\n")
+}
+
+async fn handle_grafana_alert(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(payload): Json<GrafanaWebhookPayload>,
+) -> StatusCode {
+    state.power.spike();
+    let (notify_secret, default_room_id) = {
+        let cfg = state.config.read().await;
+        let Some(ref secret) = cfg.notify_secret else {
+            tracing::warn!("grafana webhook called but notify_secret not configured");
+            return StatusCode::NOT_FOUND;
+        };
+        let Some(ref matrix_cfg) = cfg.matrix else {
+            tracing::error!("grafana webhook: matrix not configured");
+            return StatusCode::SERVICE_UNAVAILABLE;
+        };
+        (secret.clone(), matrix_cfg.room_id.clone())
+    };
+
+    let provided = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .unwrap_or("");
+    if !verify::constant_time_eq_pub(provided.as_bytes(), notify_secret.as_bytes()) {
+        tracing::warn!("grafana webhook: invalid bearer token");
+        return StatusCode::UNAUTHORIZED;
+    }
+
+    let matrix_conn = match state.registry.get_dyn("matrix").await {
+        Some(c) => c,
+        None => {
+            tracing::error!("grafana webhook: matrix connector not registered");
+            return StatusCode::SERVICE_UNAVAILABLE;
+        }
+    };
+    let matrix_connector = match matrix_conn
+        .as_any()
+        .downcast_ref::<crate::connectors::matrix::MatrixConnector>()
+    {
+        Some(c) => c,
+        None => {
+            tracing::error!("grafana webhook: registry 'matrix' is not MatrixConnector");
+            return StatusCode::SERVICE_UNAVAILABLE;
+        }
+    };
+    let bot = match matrix_connector.bot().await {
+        Ok(b) => b,
+        Err(_) => {
+            tracing::error!("grafana webhook: matrix bot not running");
+            return StatusCode::SERVICE_UNAVAILABLE;
+        }
+    };
+
+    let target_room = headers
+        .get("x-gluebox-room-id")
+        .and_then(|v| v.to_str().ok())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .unwrap_or(default_room_id);
+
+    let message = format_grafana_alerts(&payload);
+
+    match bot.send_markdown_to_room(&target_room, &message).await {
+        Ok(()) => {
+            tracing::info!(
+                room = %target_room,
+                alerts = payload.alerts.len(),
+                status = %payload.status,
+                "grafana webhook: alert relayed to matrix"
+            );
+            StatusCode::OK
+        }
+        Err(e) => {
+            tracing::error!(%e, room = %target_room, "grafana webhook: failed to send to matrix");
+            StatusCode::INTERNAL_SERVER_ERROR
+        }
+    }
+}
+
+#[cfg(test)]
+mod grafana_alert_format_tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    fn mk_alert(name: &str, status: &str, summary: &str) -> GrafanaAlertItem {
+        let mut labels = BTreeMap::new();
+        labels.insert("alertname".into(), name.into());
+        let mut annotations = BTreeMap::new();
+        annotations.insert("summary".into(), summary.into());
+        GrafanaAlertItem {
+            status: status.into(),
+            labels,
+            annotations,
+            generator_url: String::new(),
+            starts_at: String::new(),
+        }
+    }
+
+    #[test]
+    fn firing_status_renders_outcome_icon() {
+        let mut common = BTreeMap::new();
+        common.insert("severity".into(), "critical".into());
+        let payload = GrafanaWebhookPayload {
+            status: "firing".into(),
+            title: "AISummaryFailureRatioHigh".into(),
+            message: String::new(),
+            alerts: vec![mk_alert("AISummaryFailureRatioHigh", "firing", "Summary failures > 10%")],
+            common_labels: common,
+            external_url: "https://grafana.example/alert".into(),
+        };
+        let rendered = format_grafana_alerts(&payload);
+        assert!(rendered.starts_with("[FIRING] AISummaryFailureRatioHigh"));
+        assert!(rendered.contains("severity: critical"));
+        assert!(rendered.contains("Summary failures > 10%"));
+        assert!(rendered.contains("dashboard: https://grafana.example/alert"));
+    }
+
+    #[test]
+    fn resolved_status_renders_resolved_marker() {
+        let payload = GrafanaWebhookPayload {
+            status: "resolved".into(),
+            title: "RPCErrorRateSpike".into(),
+            message: String::new(),
+            alerts: vec![mk_alert("RPCErrorRateSpike", "resolved", "RPC errors back to baseline")],
+            common_labels: BTreeMap::new(),
+            external_url: String::new(),
+        };
+        let rendered = format_grafana_alerts(&payload);
+        assert!(rendered.starts_with("[RESOLVED] RPCErrorRateSpike"));
+        assert!(rendered.contains("[resolved]"));
+    }
+
+    #[test]
+    fn many_alerts_truncate_to_six() {
+        let alerts: Vec<GrafanaAlertItem> = (0..10)
+            .map(|i| mk_alert(&format!("alert_{i}"), "firing", "test"))
+            .collect();
+        let payload = GrafanaWebhookPayload {
+            status: "firing".into(),
+            title: "Multiple".into(),
+            message: String::new(),
+            alerts,
+            common_labels: BTreeMap::new(),
+            external_url: String::new(),
+        };
+        let rendered = format_grafana_alerts(&payload);
+        let alert_lines = rendered.matches("  • alert_").count();
+        assert_eq!(alert_lines, 6);
+        assert!(rendered.contains("4 additional alerts not shown"));
+    }
+
+    #[test]
+    fn empty_payload_only_renders_icon() {
+        let payload = GrafanaWebhookPayload {
+            status: String::new(),
+            title: String::new(),
+            message: String::new(),
+            alerts: vec![],
+            common_labels: BTreeMap::new(),
+            external_url: String::new(),
+        };
+        let rendered = format_grafana_alerts(&payload);
+        assert_eq!(rendered, "[ALERT]");
+    }
+
+    #[test]
+    fn message_falls_back_when_alerts_empty() {
+        let payload = GrafanaWebhookPayload {
+            status: "firing".into(),
+            title: "Plain".into(),
+            message: "Custom alert text".into(),
+            alerts: vec![],
+            common_labels: BTreeMap::new(),
+            external_url: String::new(),
+        };
+        let rendered = format_grafana_alerts(&payload);
+        assert!(rendered.contains("Custom alert text"));
     }
 }
 
