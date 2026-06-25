@@ -97,6 +97,13 @@ in
 
   systemd.tmpfiles.rules = [
     "z /etc/gluebox/gluebox.toml 0600 root root -"
+    # Keep root's runtime dir + dbus session bus alive even with no login session.
+    # deploy-rs activates switch-to-configuration over a non-login SSH channel, so
+    # /run/user/0 (and its bus) is absent; the stock switch-to-configuration-ng
+    # `switchInhibitors` pre-check then dies with "Failed to open dbus connection
+    # /run/user/0/bus: Connection refused" and deploy-rs rolls the deploy back.
+    # Lingering for root makes that bus persistent so activation can query logind.
+    "f /var/lib/systemd/linger/root 0644 root root - -"
   ];
 
   fonts.packages = [ pkgs.jetbrains-mono ];
